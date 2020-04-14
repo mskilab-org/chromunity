@@ -1,7 +1,6 @@
-
-
-
 # chromunity
+
+![chromunity](inst/extdata/chromunity_logo.jpg)
 
 ### <font color=black> Discovery of communities in Pore-C concatemers.</font>
 
