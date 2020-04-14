@@ -3,14 +3,17 @@ Title: Discovery of communities in Pore-C concatemers
 Version: 0.0.1
 Authors@R: c(person("Aditya", "Deshpande", role = c("aut", "cre"), email = "asd3002@med.cornell.edu"),
 	person("Marcin", "Imielinski", role = c("aut"), email = "mai9037@med.cornell.edu"))
-Description: Discovery of communities in Pore-C concatemers
+Description: Discovery of communities in Pore-C concatemers.
 biocViews:
-Depends: R (>= 3.3.0), 
+Depends: R (>= 3.5.0), 
     data.table (>= 1.10)
 Imports: 
     gUtils,
     Matrix,
+    igraph,
+    magrittr,
     GenomicRanges,
+    BiocGenerics,
     zoo,
     stats,
     MASS

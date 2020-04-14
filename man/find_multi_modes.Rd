@@ -19,9 +19,9 @@ find_multi_modes(
 
 \item{y.field}{values to be smoothed}
 
-\item{distance}{numeric genomic distance beyond which a peak is not considered local}
+\item{w}{window size over which to smooth the distribution}
 
-\item{which.gr}{the GRanges for the window of interest}
+\item{distance}{numeric genomic distance beyond which a peak is not considered local}
 }
 \value{
 \code{find_multi_modes} returns boolean value if more than one peak is present

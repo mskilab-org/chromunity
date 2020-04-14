@@ -1,4 +1,3 @@
-#' @import GenomicRanges
 #' @importFrom data.table data.table
 #' @importFrom data.table rbindlist
 #' @importFrom data.table set
@@ -7,16 +6,20 @@
 #' @importFrom data.table setkeyv
 #' @importFrom data.table setnames
 #' @importFrom data.table transpose
-#' @import Matrix
+#' @importFrom Matrix sparseMatrix 
 #' @import zoo
-#' @importFrom gUtils gr2dt
-#' @importFrom gUtils dt2gr
 #' @importFrom stats median
 #' @importFrom stats na.omit
 #' @importFrom MASS ginv
 #' @importFrom utils globalVariables
-#' @import dplyr
+#' @importFrom magrittr %>%
+#' @import GenomicRanges
+#' @import gUtils
+#' @importFrom igraph graph.adjacency
+#' @importFrom igraph cluster_louvain
+#' @importFrom BiocGenerics t
 
+globalVariables(c("::", ":::", "num.memb", "community", "max.local.dist", "read_idx", "as.data.table", "count", "dcast.data.table", "combn", "tot", "copy", "nfrac", "nmat", ".", "bx2", "bx1", "as", "seqlevels", "loess", ".N", ".SD", ":="))
 
 
 
@@ -47,7 +50,7 @@
 #' 
 #' @param frac fraction of concatemer to be subsampled. To be set if take_sub_sample == TRUE.
 #'
-#' @param verbose boolean (default == TRUE). Outputs progress.
+#' @param seed.n numeric set a seed when doing random subsampling
 #' 
 #' @return \code{chromunity} returns input GRanges with additional columns as follows:
 #' 
@@ -62,7 +65,6 @@
 
 chromunity <- function(this.pc.gr, k.knn = 10, k.min = 1, tiles, which.gr = which.gr, filter_local_number = FALSE, filter_local_thresh = NULL, take_sub_sample = FALSE, frac = 0.25, seed.n = 154){
     
-    require(Matrix)
     reads = this.pc.gr 
     if (filter_local_number){
         message(paste0("Filtering out reads < ", filter_local_thresh))
@@ -77,7 +79,7 @@ chromunity <- function(this.pc.gr, k.knn = 10, k.min = 1, tiles, which.gr = whic
     reads = as.data.table(reads)[, count := .N, by = read_idx]
     mat = dcast.data.table(reads[count > 1 ,]  %>% gr2dt, read_idx ~ tix, value.var = "strand", fill = 0)
     mat2 = mat[, c(list(read_idx = read_idx), lapply(.SD, function(x) x >= 1)),.SDcols = names(mat)[-1]]
-    mat2 = mat2[, "NA" := NULL]
+    mat2 = suppressWarnings(mat2[, "NA" := NULL])
     reads.ids = mat2$read_idx
     mat2 = as.data.table(lapply(mat2, as.numeric))
 
@@ -98,6 +100,7 @@ chromunity <- function(this.pc.gr, k.knn = 10, k.min = 1, tiles, which.gr = whic
     ubx = gt$read_idx
     message("Matrices made")
     gc()
+
     ## Prepare pairs for KNN
     pairs = t(do.call(cbind, apply(gt[,setdiff(which(colSums(gt) > 1),1), with = FALSE] %>% as.matrix, 2, function(x) combn(which(x!=0),2))))
     p1 = gt[pairs[,1], -1]
@@ -116,6 +119,7 @@ chromunity <- function(this.pc.gr, k.knn = 10, k.min = 1, tiles, which.gr = whic
     dt3.2 = dt3[order(nfrac, nmat, decreasing = T)]
     message("Pairs made")
     gc()
+
     ## Clustering    
     k = k.knn
     knn.dt = dt3.2[mat >= 2 & tot >= 2, .(knn = bx2[1:k]), by = bx1][!is.na(knn), ]
@@ -123,22 +127,20 @@ chromunity <- function(this.pc.gr, k.knn = 10, k.min = 1, tiles, which.gr = whic
     knn = sparseMatrix(knn.dt$bx1, knn.dt$knn, x = 1)
     knn.shared = knn %*% knn
     message("KNN done")
-    
+
     ## community find in graph where each edge weight is # nearest neighbors (up to k) shared between the two nodes
     KMIN = k.min
     A = knn.shared*sign(knn.shared > KMIN)
     A[cbind(1:nrow(A), 1:nrow(A))] = 0
     A <- as(A, "matrix")
-    A <- as(A, "sparseMatrix") 
-    A = A+t(A)
+    A <- as(A, "sparseMatrix")
+    A = A + t(A)
     G = graph.adjacency(A, weighted = TRUE, mode = 'undirected')
     cl.l = cluster_louvain(G)
     cl = cl.l$membership
     message("Communities made")
     memb.dt = data.table(read_idx = ubx[1:nrow(A)], community = cl)
     reads = merge(reads, memb.dt, by = "read_idx")
-    reads[, max.clust.dist := max(max.dist), by = community]
-    reads[, min.clust.dist := min(max.dist), by = community]
     reads[, num.memb := length(unique(read_idx)), by = community]
     reads = dt2gr(reads)
     return(reads)
@@ -146,9 +148,9 @@ chromunity <- function(this.pc.gr, k.knn = 10, k.min = 1, tiles, which.gr = whic
 
 
 ##############################
-## annotate_multimodal_clusters
+## annotate_multimodal_communities
 ##############################
-#' @name  annotate_multimodal_clusters 
+#' @name  annotate_multimodal_communities 
 #' 
 #'
 #' @title Annotates communities that are very dense with respect to genomic coordinates. 
@@ -159,16 +161,10 @@ chromunity <- function(this.pc.gr, k.knn = 10, k.min = 1, tiles, which.gr = whic
 #' @param granges GRanges output from chromunity function
 #' 
 #' @param which.gr the GRanges for the window of interest
-#' 
-#' @param k.min numeric the threshold to number of concatemers pairs to be considered "similar"
-#' 
-#' @param tiles GRanges object dividing the genome in a fixed size bin to be defined by user
-#' 
-#' @param which.gr the GRanges for the window of interest
 #'
 #' @param min.memb numeric minimum number of members needed to be in a community to be considered for further analyses
 #' 
-#' @return \code{annotate_local_clusters} returns input GRanges with additional columns as follows:
+#' @return \code{annotate_local_communities} returns input GRanges with additional columns as follows:
 #' 
 #'    \item{multimodal}{  boolean; \cr
 #'              whether a community had multimodal contacts based on parameters set by user
@@ -176,7 +172,7 @@ chromunity <- function(this.pc.gr, k.knn = 10, k.min = 1, tiles, which.gr = whic
 #'  
 #' @author Aditya Deshpande
 
-annotate_multimodal_clusters <- function(granges, which.gr, min.memb = 50){
+annotate_multimodal_communities <- function(granges, which.gr, min.memb = 50){
     this.dt = gr2dt(granges)[num.memb > min.memb]
     ind.int = unique(this.dt$community)
     dt.stat = data.table()
@@ -186,7 +182,7 @@ annotate_multimodal_clusters <- function(granges, which.gr, min.memb = 50){
         dt.int = this.dt[community == which.int]
         dt.int.tmp = gr2dt(dt2gr(dt.int) %&&% which.gr)
         setkeyv(dt.int.tmp, c("seqnames", "start"))
-        dt.sum = gr.sum(dt2gr(dt.int.tmp)+1e3)
+        dt.sum = suppressWarnings(gr.sum(dt2gr(dt.int.tmp)+1e3))
         y.max.val = max(dt.sum$score)
         peak.gr = find_multi_modes( dt.sum[-1], w =  round(0.05*length(dt.sum[-1])), distance = 0.1*width(which.gr))
         status = unique(peak.gr$bimodal)
@@ -194,7 +190,7 @@ annotate_multimodal_clusters <- function(granges, which.gr, min.memb = 50){
     }
 
     this.dt = merge(this.dt, dt.stat, by = "community", allow.cartesian = T)
-    return(this.dt)
+    return(dt2gr(this.dt))
 }
         
         
@@ -213,11 +209,11 @@ annotate_multimodal_clusters <- function(granges, which.gr, min.memb = 50){
 #' @export
 #' @param granges GRanges output from chromunity function for one community
 #' 
-#' @param which.gr the GRanges for the window of interest
-#' 
 #' @param x.field This is the X axis along which smoothing is done
 #' 
 #' @param y.field values to be smoothed
+#'
+#' @param w window size over which to smooth the distribution
 #' 
 #' @param distance numeric genomic distance beyond which a peak is not considered local 
 #' 
@@ -228,9 +224,8 @@ annotate_multimodal_clusters <- function(granges, which.gr, min.memb = 50){
 
 find_multi_modes <- function(granges, x.field = "start", y.field = "score", w = 1,  distance = 1e5) {
     which.chr = seqlevels(granges)
-    x = start(granges)
+    x = x = gr2dt(granges)$start
     y = values(granges)[, y.field]
-    require(zoo)
     n <- length(y)
     y.smooth <- loess(y ~ x, span = 0.1)$fitted
     y.max <- rollapply(zoo(y.smooth), 2*w+1, max, align="center")

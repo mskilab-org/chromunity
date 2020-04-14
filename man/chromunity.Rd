@@ -36,7 +36,7 @@ chromunity(
 
 \item{frac}{fraction of concatemer to be subsampled. To be set if take_sub_sample == TRUE.}
 
-\item{verbose}{boolean (default == TRUE). Outputs progress.}
+\item{seed.n}{numeric set a seed when doing random subsampling}
 }
 \value{
 
