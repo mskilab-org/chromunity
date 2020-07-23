@@ -136,7 +136,7 @@ chromunity <- function(this.pc.gr, k.knn = 10, k.min = 1, tiles, which.gr = whic
     A <- as(A, "sparseMatrix")
     A = A + t(A)
     G = graph.adjacency(A, weighted = TRUE, mode = 'undirected')
-    cl.l = cluster_louvain(G)
+    cl.l = cluster_fast_greedy(G)
     cl = cl.l$membership
     message("Communities made")
     memb.dt = data.table(read_idx = ubx[1:nrow(A)], community = cl)
