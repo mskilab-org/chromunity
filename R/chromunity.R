@@ -77,7 +77,7 @@ chromunity <- function(this.pc.gr, k.knn = 10, k.min = 1, tiles, which.gr = whic
     
     reads$tix = gr.match(reads, tiles)
     reads = as.data.table(reads)[, count := .N, by = read_idx]
-    mat = dcast.data.table(reads[count > 1 ,]  %>% gr2dt, read_idx ~ tix, value.var = "strand", fill = 0)
+    mat = dcast.data.table(reads[count > 2 ,]  %>% gr2dt, read_idx ~ tix, value.var = "strand", fill = 0)
     mat2 = mat[, c(list(read_idx = read_idx), lapply(.SD, function(x) x >= 1)),.SDcols = names(mat)[-1]]
     mat2 = suppressWarnings(mat2[, "NA" := NULL])
     reads.ids = mat2$read_idx
@@ -122,7 +122,7 @@ chromunity <- function(this.pc.gr, k.knn = 10, k.min = 1, tiles, which.gr = whic
 
     ## Clustering    
     k = k.knn
-    knn.dt = dt3.2[mat >= 2 & tot >= 2, .(knn = bx2[1:k]), by = bx1][!is.na(knn), ]
+    knn.dt = dt3.2[mat > 2 & tot > 2, .(knn = bx2[1:k]), by = bx1][!is.na(knn), ]
     setkey(knn.dt)
     knn = sparseMatrix(knn.dt$bx1, knn.dt$knn, x = 1)
     knn.shared = knn %*% knn
