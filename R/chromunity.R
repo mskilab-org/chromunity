@@ -241,8 +241,6 @@ find_multi_modes <- function(granges, x.field = "start", y.field = "score", w = 
 }
 
 
-
-
 #' @name background
 #' @description
 #' Given n binsets generates random "background" binsets that mirrors the input binset characteristics with respect to chromosome, width, and distance.
@@ -252,6 +250,7 @@ find_multi_modes <- function(granges, x.field = "start", y.field = "score", w = 
 #' x
 #' @param binsets GRanges of bins with fields seqnames, start, end, and $bid specifying binset id
 #' @param n integer scalar specifying number of sets to sample (default = nrow(binsets))
+#' @author Aditya Deshpande, Marcin Imielinski
 #' @export
 background = function(binsets, n = nrow(binsets), pseudocount = 1, verbose = TRUE, mc.cores = 20)
 {
@@ -356,6 +355,7 @@ rdens = function(n, values, width = NULL, kernel="gaussian") {
 #' @param interchromosomal.dist numeric scalar of "effective" distance for inter chromosomal bins [1e8]
 #' @param verbose logical flag
 #' @param mc.cores integer how many cores to parallelize
+#' @author Aditya Deshpande, Marcin Imielinski
 #' @export
 #' @return data.table of sub-binsets i.e. k-power set of binsets annotated with $count field representing covariates, ready for fitting, **one row per binset
 annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromosomal.dist = 1e8, gg = NULL, mc.cores = 20, numchunks = 2*mc.cores-1, seed = 42, verbose = TRUE)
@@ -609,7 +609,7 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
   return(res)
 }
 
-#' @name chromunity
+#' @name Chromunity
 #' @description
 #'
 #' Runs genome-wide chromunity detection across a sliding or provided genomic window
@@ -626,7 +626,7 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
 #' @return list with items $binset,  $support, $params: $binsets is GRanges of bins with field $bid corresponding to binset id and $support which is the concatemer community supporting the binset which are GRanges with $bid
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
-chromunity = function(concatemers, resolution = 5e4, region = seqinfo2gr(concatemers), windows = NULL, window.size = 2e6, max.slice = 1e6, min.support = 5, stride = window.size/2, mc.cores = 20, k.knn = 25, k.min = 5, pad = 1e3, peak.thresh = 0.85, seed = 42, verbose = TRUE)
+Chromunity = function(concatemers, resolution = 5e4, region = seqinfo2gr(concatemers), windows = NULL, window.size = 2e6, max.slice = 1e6, min.support = 5, stride = window.size/2, mc.cores = 20, k.knn = 25, k.min = 5, pad = 1e3, peak.thresh = 0.85, seed = 42, verbose = TRUE)
 {
   if (is.null(windows))
     windows = gr.start(gr.tile(region, stride))+window.size/2
@@ -810,7 +810,7 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
 #' @private 
-;smessage = function(..., pre = 'Synergy')
+smessage = function(..., pre = 'Synergy')
   message(pre, ' ', paste0(as.character(Sys.time()), ': '), ...)
 
 #' @name cmessage
