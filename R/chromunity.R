@@ -23,128 +23,128 @@ globalVariables(c("::", ":::", "num.memb", "community", "max.local.dist", "read_
 
 
 
-##############################
-## chromunity
-##############################
-#' @name chromunity
-#'
-#' @title Discovery of communities in Pore-C concatemers
-#' 
-#' @description This function takes in a GRanges with each row as Pore-C monomer with a metadata of the corresponding concatemer id 
-#' 
-#' @export
-#' @param this.pc.gr is the GRanges with each row as Pore-C monomer and must have a cmetadata column with corresponding concatemer annotation. The column should be called "read_idx"
-#' 
-#' @param k.knn numeric threshoold on k nearest concatemer neighbors to be used to create the graph. 
-#' 
-#' @param k.min numeric the threshold to number of concatemers pairs to be considered "similar"
-#' 
-#' @param tiles GRanges object dividing the genome in a fixed size bin to be defined by user
-#' 
-#' @param which.gr the GRanges for the window of interest
-#'
-#' @param filter_local_number boolean (default == FALSE) filters out concatemers in the window that fall below filter_local_thresh length
-#' 
-#' @param filter_local_thresh (default == NULL) numeric minimum length of concatemer to be considered for downstream analyses. To be set if filter_local_number == TRUE.
-#' @param take_sub_sample take a sub sample of concatemers. A random sample of fraction frac is taken
-#' 
-#' @param frac fraction of concatemer to be subsampled. To be set if take_sub_sample == TRUE.
-#'
-#' @param seed.n numeric set a seed when doing random subsampling
-#' 
-#' @return \code{chromunity} returns input GRanges with additional columns as follows:
-#' 
-#'    \item{community}{  numeric; \cr
-#'              the community annotation for each concatemer
-#'    }
-#'    \item{num.memb}{  numeric; \cr
-#'              number of members in each community
-#' 
-#' @author Aditya Deshpande
+## ##############################
+## ## chromunity
+## ##############################
+## #' @name chromunity
+## #'
+## #' @title Discovery of communities in Pore-C concatemers
+## #' 
+## #' @description This function takes in a GRanges with each row as Pore-C monomer with a metadata of the corresponding concatemer id 
+## #' 
+## #' @export
+## #' @param this.pc.gr is the GRanges with each row as Pore-C monomer and must have a cmetadata column with corresponding concatemer annotation. The column should be called "read_idx"
+## #' 
+## #' @param k.knn numeric threshoold on k nearest concatemer neighbors to be used to create the graph. 
+## #' 
+## #' @param k.min numeric the threshold to number of concatemers pairs to be considered "similar"
+## #' 
+## #' @param tiles GRanges object dividing the genome in a fixed size bin to be defined by user
+## #' 
+## #' @param which.gr the GRanges for the window of interest
+## #'
+## #' @param filter_local_number boolean (default == FALSE) filters out concatemers in the window that fall below filter_local_thresh length
+## #' 
+## #' @param filter_local_thresh (default == NULL) numeric minimum length of concatemer to be considered for downstream analyses. To be set if filter_local_number == TRUE.
+## #' @param take_sub_sample take a sub sample of concatemers. A random sample of fraction frac is taken
+## #' 
+## #' @param frac fraction of concatemer to be subsampled. To be set if take_sub_sample == TRUE.
+## #'
+## #' @param seed.n numeric set a seed when doing random subsampling
+## #' 
+## #' @return \code{chromunity} returns input GRanges with additional columns as follows:
+## #' 
+## #'    \item{community}{  numeric; \cr
+## #'              the community annotation for each concatemer
+## #'    }
+## #'    \item{num.memb}{  numeric; \cr
+## #'              number of members in each community
+## #' 
+## #' @author Aditya Deshpande
 
 
-chromunity <- function(this.pc.gr, k.knn = 10, k.min = 1, tiles, which.gr = which.gr, filter_local_number = FALSE, filter_local_thresh = NULL, take_sub_sample = FALSE, frac = 0.25, seed.n = 154){
+## chromunity <- function(this.pc.gr, k.knn = 10, k.min = 1, tiles, which.gr = which.gr, filter_local_number = FALSE, filter_local_thresh = NULL, take_sub_sample = FALSE, frac = 0.25, seed.n = 154){
     
-    reads = this.pc.gr 
-    if (filter_local_number){
-        message(paste0("Filtering out reads < ", filter_local_thresh))
-        reads = gr2dt(reads)
-        setkeyv(reads, c("seqnames", "start"))
-        reads[, max.local.dist := end[.N]-start[1], by = read_idx]
-        reads = reads[max.local.dist > filter_local_thresh]
-        reads = dt2gr(reads)
-    }
+##     reads = this.pc.gr 
+##     if (filter_local_number){
+##         message(paste0("Filtering out reads < ", filter_local_thresh))
+##         reads = gr2dt(reads)
+##         setkeyv(reads, c("seqnames", "start"))
+##         reads[, max.local.dist := end[.N]-start[1], by = read_idx]
+##         reads = reads[max.local.dist > filter_local_thresh]
+##         reads = dt2gr(reads)
+##     }
     
-    reads$tix = gr.match(reads, tiles)
-    reads = as.data.table(reads)[, count := .N, by = read_idx]
-    mat = dcast.data.table(reads[count > 2 ,]  %>% gr2dt, read_idx ~ tix, value.var = "strand", fill = 0)
-    mat2 = mat[, c(list(read_idx = read_idx), lapply(.SD, function(x) x >= 1)),.SDcols = names(mat)[-1]]
-    mat2 = suppressWarnings(mat2[, "NA" := NULL])
-    reads.ids = mat2$read_idx
-    mat2 = as.data.table(lapply(mat2, as.numeric))
+##     reads$tix = gr.match(reads, tiles)
+##     reads = as.data.table(reads)[, count := .N, by = read_idx]
+##     mat = dcast.data.table(reads[count > 2 ,]  %>% gr2dt, read_idx ~ tix, value.var = "strand", fill = 0)
+##     mat2 = mat[, c(list(read_idx = read_idx), lapply(.SD, function(x) x >= 1)),.SDcols = names(mat)[-1]]
+##     mat2 = suppressWarnings(mat2[, "NA" := NULL])
+##     reads.ids = mat2$read_idx
+##     mat2 = as.data.table(lapply(mat2, as.numeric))
 
-    if (take_sub_sample){
-        tot.num = nrow(mat2[rowSums(mat2[, -1]) > 1, ])
-        message(paste0("Total number of rows are: ", tot.num))
-        message("taking a subsample")
-        number.to.subsample = pmax(round(tot.num*frac), 1000)
-        message(paste0("Number sampled: ", number.to.subsample))
-        set.seed(seed.n)
-        gt = mat2[rowSums(mat2[, -1]) > 1, ][sample(.N, number.to.subsample), ] 
-    }
+##     if (take_sub_sample){
+##         tot.num = nrow(mat2[rowSums(mat2[, -1]) > 1, ])
+##         message(paste0("Total number of rows are: ", tot.num))
+##         message("taking a subsample")
+##         number.to.subsample = pmax(round(tot.num*frac), 1000)
+##         message(paste0("Number sampled: ", number.to.subsample))
+##         set.seed(seed.n)
+##         gt = mat2[rowSums(mat2[, -1]) > 1, ][sample(.N, number.to.subsample), ] 
+##     }
 
-    else {
-        gt = mat2[rowSums(mat2[, -1]) > 1, ]
-    }
+##     else {
+##         gt = mat2[rowSums(mat2[, -1]) > 1, ]
+##     }
     
-    ubx = gt$read_idx
-    message("Matrices made")
-    gc()
+##     ubx = gt$read_idx
+##     message("Matrices made")
+##     gc()
 
-    ## Prepare pairs for KNN
-    pairs = t(do.call(cbind, apply(gt[,setdiff(which(colSums(gt) > 1),1), with = FALSE] %>% as.matrix, 2, function(x) combn(which(x!=0),2))))
-    p1 = gt[pairs[,1], -1]
-    p2 = gt[pairs[,2], -1]
-    matching = rowSums(p1 & p2)
-    total = rowSums(p1 | p2)
-    dt = data.table(bx1 = pairs[,1], bx2 = pairs[,2], mat = matching, tot = total)[, frac := mat/tot]
-    dt2 = copy(dt)
-    dt2$bx2 = dt$bx1
-    dt2$bx1 = dt$bx2
-    dt3 = rbind(dt, dt2)
-    dt3$nmat = dt3$mat
-    dt3$nfrac = dt3$frac
-    setkeyv(dt3, c('nfrac', 'nmat'))
-    dt3 = unique(dt3)
-    dt3.2 = dt3[order(nfrac, nmat, decreasing = T)]
-    message("Pairs made")
-    gc()
+##     ## Prepare pairs for KNN
+##     pairs = t(do.call(cbind, apply(gt[,setdiff(which(colSums(gt) > 1),1), with = FALSE] %>% as.matrix, 2, function(x) combn(which(x!=0),2))))
+##     p1 = gt[pairs[,1], -1]
+##     p2 = gt[pairs[,2], -1]
+##     matching = rowSums(p1 & p2)
+##     total = rowSums(p1 | p2)
+##     dt = data.table(bx1 = pairs[,1], bx2 = pairs[,2], mat = matching, tot = total)[, frac := mat/tot]
+##     dt2 = copy(dt)
+##     dt2$bx2 = dt$bx1
+##     dt2$bx1 = dt$bx2
+##     dt3 = rbind(dt, dt2)
+##     dt3$nmat = dt3$mat
+##     dt3$nfrac = dt3$frac
+##     setkeyv(dt3, c('nfrac', 'nmat'))
+##     dt3 = unique(dt3)
+##     dt3.2 = dt3[order(nfrac, nmat, decreasing = T)]
+##     message("Pairs made")
+##     gc()
 
-    ## Clustering    
-    k = k.knn
-    knn.dt = dt3.2[mat > 2 & tot > 2, .(knn = bx2[1:k]), by = bx1][!is.na(knn), ]
-    setkey(knn.dt)
-    knn = sparseMatrix(knn.dt$bx1, knn.dt$knn, x = 1)
-    knn.shared = knn %*% knn
-    message("KNN done")
+##     ## Clustering    
+##     k = k.knn
+##     knn.dt = dt3.2[mat > 2 & tot > 2, .(knn = bx2[1:k]), by = bx1][!is.na(knn), ]
+##     setkey(knn.dt)
+##     knn = sparseMatrix(knn.dt$bx1, knn.dt$knn, x = 1)
+##     knn.shared = knn %*% knn
+##     message("KNN done")
 
-    ## community find in graph where each edge weight is # nearest neighbors (up to k) shared between the two nodes
-    KMIN = k.min
-    A = knn.shared*sign(knn.shared > KMIN)
-    A[cbind(1:nrow(A), 1:nrow(A))] = 0
-    A <- as(A, "matrix")
-    A <- as(A, "sparseMatrix")
-    A = A + t(A)
-    G = graph.adjacency(A, weighted = TRUE, mode = 'undirected')
-    cl.l = cluster_fast_greedy(G)
-    cl = cl.l$membership
-    message("Communities made")
-    memb.dt = data.table(read_idx = ubx[1:nrow(A)], community = cl)
-    reads = merge(reads, memb.dt, by = "read_idx")
-    reads[, num.memb := length(unique(read_idx)), by = community]
-    reads = dt2gr(reads)
-    return(reads)
-}
+##     ## community find in graph where each edge weight is # nearest neighbors (up to k) shared between the two nodes
+##     KMIN = k.min
+##     A = knn.shared*sign(knn.shared > KMIN)
+##     A[cbind(1:nrow(A), 1:nrow(A))] = 0
+##     A <- as(A, "matrix")
+##     A <- as(A, "sparseMatrix")
+##     A = A + t(A)
+##     G = graph.adjacency(A, weighted = TRUE, mode = 'undirected')
+##     cl.l = cluster_fast_greedy(G)
+##     cl = cl.l$membership
+##     message("Communities made")
+##     memb.dt = data.table(read_idx = ubx[1:nrow(A)], community = cl)
+##     reads = merge(reads, memb.dt, by = "read_idx")
+##     reads[, num.memb := length(unique(read_idx)), by = community]
+##     reads = dt2gr(reads)
+##     return(reads)
+## }
 
 
 ##############################
@@ -194,7 +194,6 @@ annotate_multimodal_communities <- function(granges, which.gr, min.memb = 50){
 }
         
         
-
 
 ##############################
 ## find_multi_modes
@@ -579,6 +578,13 @@ score = function(annotated.binsets, model, verbose = TRUE)
 #' @export
 synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL, covariates = NULL, annotated.binsets = NULL, k = 5, gg = NULL, mc.cores = 20, verbose = TRUE)
 {
+  if (!inherits(binsets, 'GRanges'))
+    {
+      binsets = muffle(dt2gr(binsets))
+      if (is.null(binsets))
+        stop('binsets failed conversion to GRanges, please provide valid GRnges')
+    }
+
   if (is.null(background.binsets) & is.null(model))
   {
     if (verbose) fmessage('Computing random background binsets using features of provided binsets')
@@ -603,13 +609,13 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
   setkey(scored.binsets, bid)
   ubid = unique(scored.binsets$bid)
 
-  res = pbmclapply(ubid, function(this.bid) muffle(dflm(glm.nb(data = scored.binsets[.(this.bid),], count ~ offset(log(count.predicted))))[1, name := this.bid])) %>% rbindlist
+  res = pbmclapply(ubid, function(this.bid) muffle(dflm(glm.nb(data = scored.binsets[.(this.bid),], count ~ multiway + offset(log(count.predicted))))[2, ][, name := this.bid])) %>% rbindlist
   setnames(res, 'name', 'bid')
 
   return(res)
 }
 
-#' @name Chromunity
+#' @name chromunity
 #' @description
 #'
 #' Runs genome-wide chromunity detection across a sliding or provided genomic window
@@ -626,7 +632,7 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
 #' @return list with items $binset,  $support, $params: $binsets is GRanges of bins with field $bid corresponding to binset id and $support which is the concatemer community supporting the binset which are GRanges with $bid
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
-Chromunity = function(concatemers, resolution = 5e4, region = seqinfo2gr(concatemers), windows = NULL, window.size = 2e6, max.slice = 1e6, min.support = 5, stride = window.size/2, mc.cores = 20, k.knn = 25, k.min = 5, pad = 1e3, peak.thresh = 0.85, seed = 42, verbose = TRUE)
+chromunity = function(concatemers, resolution = 5e4, region = si2gr(concatemers), windows = NULL, window.size = 2e6, max.slice = 1e6, min.support = 5, stride = window.size/2, mc.cores = 20, k.knn = 25, k.min = 5, pad = 1e3, peak.thresh = 0.85, seed = 42, verbose = TRUE)
 {
   if (is.null(windows))
     windows = gr.start(gr.tile(region, stride))+window.size/2
@@ -634,9 +640,17 @@ Chromunity = function(concatemers, resolution = 5e4, region = seqinfo2gr(concate
   if (inherits(windows, 'GRanges'))
     windows = split(windows, 1:length(windows))
 
-  params = list(k.knn = k.knn, k.min = k.min, seed = seed)
+  if (is.null(concatemers$cid))
+  {
+      if ('read_idx' %in% names(values(concatemers)))
+        names(values(concatemers))[match('read_idx', names(values(concatemers)))] = 'cid'
+      else
+        stop("concatemer GRanges must have metadata column $cid or $read_idx specifying the concatemer id")
+  }
+  
+  params = data.table(k.knn = k.knn, k.min = k.min, seed = seed)
 
-  bins = gr.tile(reduce(gr.stripstrand(windows)), 5e4)[, c()]
+  bins = gr.tile(reduce(gr.stripstrand(unlist(windows))), 5e4)[, c()]
 
   if (verbose) cmessage('Generated ', length(bins), ' bins across ', length(windows), ' windows')
 
@@ -655,44 +669,48 @@ Chromunity = function(concatemers, resolution = 5e4, region = seqinfo2gr(concate
 
   cc = pbmclapply(winids, mc.cores = mc.cores, function(win)
   {
-    these.bins = binmap[.(win), ]
-    cc = concatemer_communities(concatemers %Q% (binid %in% these.bins$binid), k.knn = k.knn, k.min = k.min, seed = seed, verbose = verbose>1)
-    if (length(cc))
+    suppressWarnings({
+      these.bins = binmap[.(win), ]
+      cc = concatemer_communities(concatemers %Q% (binid %in% these.bins$binid), k.knn = k.knn, k.min = k.min, seed = seed, verbose = verbose>1)
+      if (length(cc))
       {
-        cc = cc %Q% (support >= min.support)
+        cc = cc[cc$support >= min.support]
         cc$winid = win
       }
+    })
     cc
   }) %>% do.call(grbind, .)
 
   if (!length(cc))
-    return(list(concatemers = cc, chromunities = GRanges(), params = params))
+    return(Chromunity(concatemers = cc, chromunities = GRanges(), params = params))
 
-  ubid = unique(cc$bid)
+  uchid = unique(cc$chid)
 
-  if (verbose) cmessage('Analyzing gr.sums associated with ', length(ubid), ' concatemer communities to generate binsets')
+  if (verbose) cmessage('Analyzing gr.sums associated with ', length(uchid), ' concatemer communities to generate binsets')
 
-  binsets = pbmclapply(ubid, mc.cores = mc.cores, function(this.bid)
+  binsets = pbmclapply(uchid, mc.cores = mc.cores, function(this.chid)
   {
-    this.cc = cc %Q% (bid == this.bid)
-    peaks = gr.sum(this.cc + pad) %>% gr.peaks('score')
-    binset = bins[, c()] %&% (peaks %Q% (score > quantile(footprint$score, peak.thresh)))
-    if (length(binset))
+    suppressWarnings({
+      this.cc = cc %Q% (chid == this.chid)
+      peaks = gr.sum(this.cc + pad) %>% gr.peaks('score')
+      binset = bins[, c()] %&% (peaks[peaks$score > quantile(peaks$score, peak.thresh)])
+      if (length(binset))
       {
-        binset$bid = this.bid
+        binset$chid = this.chid
         binset$winid = this.cc$winid[1]
       }
+    })
     binset
   })  %>% do.call(grbind, .)
 
-  return(list(concatemers = cc %Q% (bid %in% binset$bid), binsets = binsets, params = params))
+  return(Chromunity(concatemers = cc[cc$chid %in% binsets$chid], binsets = binsets, meta = params))
 }
 
 
 #' @name concatemer_communities
 #' @description
 #'
-#' Low level function that labels concatemers with community ids $bid using community detection on a graph. 
+#' Low level function that labels concatemers with chromunity ids $chid using community detection on a graph. 
 #'
 #' Given a GRanges of monomers labeled by concatemer id $cid
 #'
@@ -713,7 +731,7 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
   if (is.null(reads$cid))
   {
     if ('read_idx' %in% names(values(reads)))
-      names(values)[match('read_idx', names(values(reads)))] = 'cid'
+      names(values(reads))[match('read_idx', names(values(reads)))] = 'cid'
     else
       stop("concatemer GRanges must have metadata column $cid or $read_idx specifying the concatemer id")
   }
@@ -757,7 +775,7 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
   if (!ncol(concatm))
   {
     warning('No concatemers found hitting two bins, returning empty result')
-    return(reads[, bid := NA][c(), ])
+    return(reads[, chid := NA][c(), ])
   }
 
   pairs = t(do.call(cbind, apply(concatm[, setdiff(which(colSums(concatm) > 1), 1), with = FALSE] %>% as.matrix, 2, function(x) combn(which(x != 0), 2))))
@@ -765,8 +783,8 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
   concatm = as(as.matrix(as.data.frame(concatm)), "sparseMatrix")    
   p1 = concatm[pairs[, 1], -1]
   p2 = concatm[pairs[, 2], -1]
-  matching = rowSums(p1 & p2)
-  total = rowSums(p1 | p2)
+  matching = Matrix::rowSums(p1 & p2)
+  total = Matrix::rowSums(p1 | p2)
   dt = data.table(bx1 = pairs[, 1], bx2 = pairs[, 2], mat = matching, 
                   tot = total)[, `:=`(frac, mat/tot)]
   dt2 = copy(dt)
@@ -781,8 +799,7 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
   if (verbose) cmessage("Pairs made")
   gc()
   k = k.knn
-  knn.dt = dt3.2[mat > 2 & tot > 2, .(knn = bx2[1:k]), by = bx1][!is.na(knn), 
-                                                                 ]
+  knn.dt = dt3.2[mat > 2 & tot > 2, .(knn = bx2[1:k]), by = bx1][!is.na(knn), ]
   setkey(knn.dt)
   knn = sparseMatrix(knn.dt$bx1, knn.dt$knn, x = 1)
   knn.shared = knn %*% knn
@@ -797,9 +814,9 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
   cl.l = cluster_fast_greedy(G)
   cl = cl.l$membership
   if (verbose) cmessage("Communities made")
-  memb.dt = data.table(cid = ubx[1:nrow(A)], bid = cl)
+  memb.dt = data.table(cid = ubx[1:nrow(A)], chid = cl)
   reads = merge(reads, memb.dt, by = "cid")
-  reads[, `:=`(support, length(unique(cid))), by = bid]
+  reads[, `:=`(support, length(unique(cid))), by = chid]
   reads = dt2gr(reads)
   return(reads)
 }
@@ -821,3 +838,1004 @@ smessage = function(..., pre = 'Synergy')
 #' @private 
 cmessage = function(..., pre = 'Chromunity')
   message(pre, ' ', paste0(as.character(Sys.time()), ': '), ...)
+
+
+
+##########################################################################
+## CHROMUNITY.CLASS
+#########################################################################
+
+#' @name Chromunity
+#' @title Chromunity
+#'
+#' 
+Chromunity = function(binsets = GRanges(), concatemers = GRanges(), meta = data.table(), verbose = TRUE)
+{
+  ChromunityObj$new(binsets = binsets, concatemers = concatemers, meta = meta, verbose = verbose)
+}
+
+
+#' @name ChromunityObj
+#' @title Chromunity object
+#' @description
+#'
+#' Vectorized object that stores the output of chromunity analysis and can be inputted into annotate / synergy functions.
+#' The main accessors are $binsets and $concatemers which each return GRanges linked through a chromunity id $chid field
+#'
+#' Chromunities can be subsetted, concatenated.  Concatenation will result in deduping any $chid that are present in two inputs. 
+ChromunityObj = R6::R6Class("Chromunity", 
+  public = list(
+    initialize = function(binsets = GRanges(), concatemers = GRanges(), meta = data.table(), verbose = TRUE)
+    {
+      if (!inherits(binsets, 'GRanges'))
+        stop('binsets must non-NULL and a GRanges')
+      
+      if (!inherits(concatemers, 'GRanges'))
+        stop('concatemers must be a GRanges')
+
+      private$pseqlengths = data.table(len = c(seqlengths(binsets), seqlengths(concatemers)),
+                                       nm = c(names(seqlengths(binsets)), names(seqlengths(concatemers))))[, max(len, na.rm = TRUE), keyby = nm][, structure(V1, names = nm)]
+
+      if (!is.null(meta))
+        {
+          if (!is.data.table(meta))
+            stop('meta should be a data.table')
+
+          private$pmeta = copy(meta)
+        }
+      
+      ## empty binset return base object 
+      if (!length(binsets))
+        return(self)
+
+      if (is.null(binsets$chid))
+        stop('binset must have chromunity $chid field defined')
+      
+      private$pbinsets = as.data.table(binsets) %>% setkey(chid)
+
+      private$pchid = unique(binsets$chid)
+
+      ## empty concatemers, nothing to do 
+      if (!length(concatemers))
+        return(self)
+
+      if (is.null(concatemers$cid))
+      {
+        if ('read_idx' %in% names(values(concatemers)))
+          names(values(concatemers))[match('read_idx', names(values(concatemers)))] = 'cid'
+        else
+          stop("concatemer GRanges must have metadata column $cid or $read_idx specifying the concatemer id")
+      }
+
+
+      
+      if (is.null(concatemers$chid))
+      {
+        warning('concatemers do not have $chid field pre-defined, doing overlap query to match up ')
+        concatemers = concatemers %*% binsets[, 'chid']
+
+      }
+      concatemers = as.data.table(concatemers) %>% setkey(chid)
+      
+      if (length(setdiff(concatemers$chid, binsets$chid)))
+      {
+        warning("concatemers defined that don't map to provided binsets, removing")
+        concatemers = concatemers[.(unique(binsets$chid)), ]
+      }
+
+      ## tally support as keyed vector
+      support = merge(private$pbinsets, concatemers, by = 'chid', allow.cartesian = TRUE)[, .(support = length(unique(cid))), keyby = chid]
+      private$psupport = support[.(private$pchid), ][is.na(support), support := 0][, chid := private$pchid][, structure(support, names = private$pchid)]
+
+      private$pconcatemers = concatemers %>% copy
+
+      ## all done .. 
+      return(invisible(self))
+    },
+    subset = function(ix, ...){
+      if (is.integer(ix) | is.numeric(ix))
+        ix = private$pchid[ix]
+      
+      if (any(is.na(ix)) || length(setdiff(ix, private$pchid)))
+        stop('indices outside of ix of object, check query against chromunity id $chid')
+      
+
+
+      out = data.table(chid = ix, chid.new = dedup(ix))
+      private$pchid = out$chid.new
+      private$psupport = structure(private$psupport[out$chid], names = out$chid.new)
+
+      binsets = merge(private$pbinsets, out, by = 'chid', allow.cartesian = TRUE);
+      binsets$chid = binsets$chid.new
+      binsets$chid.new = NULL
+      private$pbinsets = binsets;
+
+      concatemers = merge(private$pconcatemers, out, by = 'chid', allow.cartesian = TRUE);
+      concatemers$chid = concatemers$chid.new
+      concatemers$chid.new = NULL
+      private$pconcatemers = concatemers;
+
+      return(invisible(self))
+    },
+    print = function(...)
+    {
+      quants = quantile(private$psupport, c(0, 0.5, 1))
+      message('Chromunity object with ', self$length, ' chromunities (', paste(head(private$pchid, 3), collapse = ', '), ifelse(self$length>3, ', ...', ''),  ') spanning ', nrow(private$pconcatemers), ' concatemers');
+      message('\t with median concatemer support:', quants[2], ', range: [', quants[1], '-', quants[3], ']')
+    },
+    gtrack = function(name = '', binsets = TRUE, concatemers = TRUE, heatmap = FALSE, binsize = 1e4, clim = NA, ...)
+    {
+      out = gTrack()
+      if (binsets)
+      {
+        binsets = self$binsets
+        out = c(out, gTrack(split(binsets, binsets$chid) %>% unname, height = 5, name = paste(name, 'binsets')));
+      }
+      if (concatemers)
+      {
+        concatemers = self$concatemers
+        out = c(out, gTrack(split(concatemers, concatemers$cid) %>% unname, height = 10, name = paste(name, 'concatemers')));
+      }
+      if (heatmap)
+      {
+        concatemers = self$concatemers
+        gm = self$gm(binsize = binsize)
+        out = c(out, gm$gtrack(clim = clim, ...))
+      }
+      return(out)
+    },
+    gm = function(binsize = 5e3) GxG::cocount(self$concatemers, bins = gr.tile(self$footprint, binsize), by = 'chid')
+  ),
+  private = list(
+    pchid = c(),
+    pseqlengths = c(),
+    pmeta = data.table(),
+    psupport = c(),
+    pbinsets = data.table(seqnames = factor(), start = integer(), end =  integer(), chid = factor(), support = integer()) %>% setkey(chid),
+    pconcatemers = data.table(seqnames = factor(), start = integer(), end =  integer(), chid = factor()) %>% setkey(chid)
+    ),
+  active = list(
+    chid = function() private$pchid,
+    meta = function() copy(private$pmeta),
+    length = function() length(private$pchid),
+    names = function() private$pchid,
+    gt = function(x) self$gtrack(),
+    footprint = function(x) self$binsets %>% gr.stripstrand %>% sort %>% reduce, 
+    binsets = function() dt2gr(private$pbinsets, seqlengths = private$pseqlengths),
+    concatemers = function() dt2gr(private$pconcatemers, seqlengths = private$pseqlengths),
+    support = function() private$psupport,
+    seqlengths = function() private$pseqlengths
+  )
+)
+
+
+#' @name [.Chromunity
+#' @title Subset chromunity
+#' @description
+#'
+#' Overrides the subset operator x[] for use with Chromunity
+#'
+#' @param obj Covariate This is the Covariate to be subset
+#' @param range vector This is the range of Covariates to return, like subsetting a vector. e.g. c(1,2,3,4,5)[3:4] == c(3,4)
+#' @return A new Covariate object that contains only the Covs within the given range
+#' @author Marcin Imielinski
+#' @export
+'c.Chromunity' = function(...){
+
+  ##Ensure that all params are of type Covariate
+    cc = list(...)
+    isc = sapply(cc, function(x)  class(x)[1] == 'Chromunity')
+
+    if(any(!isc)){
+        stop('Error: All inputs must be of class Chromunity.')
+    }
+
+
+  chids = lapply(cc, function(x) x$chid)
+  ## this will map old chids to new ones, preventing collisions from chid in the input lists
+  chmap = dunlist(chids)[, .(chid.old = V1, listid = listid)][, chid.new := dedup(chid.old)] %>% setkeyv(c('listid', 'chid.old'))
+
+  
+  binsets = lapply(1:length(cc), function(x) {tmp = cc[[x]]$binsets; tmp$chid = chmap[.(x, tmp$chid), chid.new];tmp %>% as.data.table})
+  concatemers = lapply(1:length(cc), function(x) {tmp = cc[[x]]$concatemers; tmp$chid = chmap[.(x, tmp$chid), chid.new]; tmp %>% as.data.table})
+  metas = lapply(cc, function(x) x$meta)
+
+  sl = (lapply(cc, function(x) data.table(nm = names(x$seqlengths), len = x$seqlengths)) %>% rbindlist)[, .(len = max(len)), keyby = nm][, structure(len, names = nm)]
+  binsets = rbindlist(binsets) %>% dt2gr(seqlengths = sl)
+  concatemers = rbindlist(concatemers) %>% dt2gr(seqlengths = sl)
+  return(ChromunityObj$new(binsets = binsets, concatemers = concatemers, meta = rbindlist(metas, fill = TRUE)))
+}
+
+
+#' @name [.Chromunity
+#' @title Subset chromunity
+#' @description
+#'
+#' Overrides the subset operator x[] for use with Chromunity
+#'
+#' @param obj Covariate This is the Covariate to be subset
+#' @param range vector This is the range of Covariates to return, like subsetting a vector. e.g. c(1,2,3,4,5)[3:4] == c(3,4)
+#' @return A new Covariate object that contains only the Covs within the given range
+#' @author Marcin Imielinski
+#' @export
+'[.Chromunity' = function(obj, range){
+  if (any(is.na(range)))
+    stop('NA in subscripts not allowed')
+
+  if (any(range>length(obj)))
+    stop('Subscript out of bounds')
+
+  ##Clone the object so we don't mess with the original
+  ret = obj$clone()
+  ##Call the subset function of the Covariate class that will modify the cloned Covariate
+  ret$subset(range)
+
+  return (ret)
+}
+
+#' @name names.Chromunity
+#' @title title
+#' @description
+#'
+#' Overrides the names function for Covariate object
+#'
+#' @param obj Covariate This is the Covariate whose names we are extracting'
+#' @return names of covariates
+#' @author Zoran Z. Gajic
+#' @export
+'names.Chromunity' = function(x) return (x$chid)
+
+#' @name length.Chromunity
+#' @title length.Chromunity
+#' @description
+#' Number of binsets in chromunity object 
+#'
+#' @param obj Covariate object that is passed to the length function
+#' @return number of covariates contained in the Covariate object as defined by length(Covariate$data)
+#' @author Zoran Z. Gajic
+#' @export
+'length.Chromunity' = function(obj,...) return(obj$length)
+
+
+##########################################################################
+## COVARIATE.CLASS
+#########################################################################
+
+
+#' @name Covariate
+#' @title title
+#' @description
+#'
+#' Stores Covariates for passing to synergy or annotate function
+#'
+#' These are GRanges of interval or numeric type.  The numeric can be optionally log transformed while the interval covariates can be
+#' count (ie count the total number of intervals in the binset) or width based (count the total width in the binset)
+#'
+#' 
+#'
+#' @param name character vector Contains names of the covariates to be created, this should not include the names of any Cov objects passed
+#' @param pad numeric vector Indicates the width to extend each item in the covarite. e.g. if you have a GRanges covariate with two ranges (5:10) and (20:30) with a pad of 5,
+#' These ranges wil become (0:15) and (15:35)
+#' @param type character vector Contains the types of each covariate (numeric, interval, sequencing)
+#' @param signature, see ffTrack, a vector of signatures for use with ffTrack sequence covariates
+#' fftab signature: signatures is a named list that specify what is to be tallied.  Each signature (ie list element)
+#' consist of an arbitrary length character vector specifying strings to %in% (grep = FALSE)
+#' or length 1 character vector to grepl (if grep = TRUE)
+#' or a length 1 or 2 numeric vector specifying exact value or interval to match (for numeric data)
+#' Every list element of signature will become a metadata column in the output GRanges
+#' specifying how many positions in the given interval match the given query
+#' @param field, a chracter vector for use with numeric covariates (NA otherwise) the indicates the column containing the values of that covarites.
+#' For example, if you have a covariate for replication timing and the timings are in the column 'value', the parameter field should be set to the character 'Value'
+#' @param na.rm, logical vector that indicates whether or not to remove nas in the covariates
+#' @param grep, a chracter vector of  grep for use with sequence covariates of class ffTrack
+#' The function fftab is called during the processing of ffTrack sequence covariates grep is used to specify inexact matches (see fftab)
+#' @param data, a list of covariate data that can include any of the covariate classes (GRanges, ffTrack, RleList, character)
+#' @param log logical flag specifying whether to log the numeric covariate, only applicable to numeric covariate
+#' @param count logical flag specifying whether to count the number of intervals 
+#' @return Covariate object that can be passed directly to the FishHook object constructor
+#' @author Zoran Z. Gajic, Marcin Imielinski
+#' @import R6
+#' @export
+Covariate = R6::R6Class('Covariate',
+    public = list(
+
+      ## See the class documentation
+      initialize = function(data = NULL, field = as.character(NA), name = as.character(NA),log = FALSE, count = TRUE, 
+                            pad = 0, type = 'numeric', signature = as.character(NA),
+                            na.rm = as.logical(NA), grep = as.logical(NA)){
+
+        ##If data are valid and are a list of tracks concatenate with any premade covs
+        if(is.null(data))
+        {
+          self$data = NULL
+          self$names = name
+          self$type = type
+          self$signature = signature
+          self$field = field
+          self$pad = pad
+          self$log = log
+          self$count = count
+          self$na.rm = na.rm
+          self$grep = grep
+          return()
+        }
+
+        if(class(data) != 'list'){
+          data = list(data)
+        }
+
+        ## replicate params and data if necessary
+        params = data.table(id = 1:length(data), field = field, name = name, pad = pad, type = type, signature = signature, na.rm = na.rm, grep = grep, log = log, count = count)
+
+        if (length(data)==1 & nrow(params)>1)
+          data = rep(data, nrow(params))
+
+        self$data = data
+
+        params$dclasses = sapply(self$data, class)
+
+        if (any(ix <<- params$dclasses == 'character'))
+        {
+          if (any(iix <<- !file.exists(unlist(self$data[ix]))))
+          {
+            stop(sprintf('Some covariate files not found:\n%s', paste(unlist(self$data[ix][iix]), collapse = ',')))
+          }
+        }
+
+        ## for any GRanges data that are provided where there is more than one metadata
+        ## column, there should be a field given, otherwise we complain
+        dmeta = NULL
+        if (any(ix <<- params$dclasses != 'character'))
+        {
+          dmeta = lapply(self$data[ix], function(x) names(values(x)))
+        }
+
+        ## we require field to be specified if GRanges have more than one metadata column, otherwise
+        ## ambiguous
+        if (length(dmeta)>0)
+        {
+          ## check to make sure that fields actually exist in the provided GRanges arguments
+          found = mapply(params$field[ix], dmeta, FUN = function(x,y) ifelse(is.na(x), NA, x %in% y))
+
+          if (any(!found, na.rm = TRUE))
+          {
+            stop('Some provided Covariate fields not found in their corresponding GRanges metadata, please check arguments')
+          }
+        }
+
+        if (na.ix <<- any(is.na(params$name)))
+        {
+          params[na.ix, name := ifelse(!is.na(field), field, paste0('Covariate', id))]
+          params[, name := dedup(name)]
+        }
+
+        ## label any type = NA covariates for which a field has not been specified
+        ## as NA by default
+        if (any(na.ix <<- !is.na(params$field) & is.na(params$type)))
+        {
+          params[na.ix, type := 'numeric']
+        }
+
+        if (any(na.ix <<- is.na(params$field) & is.na(params$type)))
+        {
+          params[na.ix, type := 'interval']
+        }
+
+        ## check names to make sure not malformed, i.e. shouldn't start with number or contain spaces or special
+        ## characters
+
+        if (any(iix <<- grepl('\\W', params$name)))
+        {
+          warning('Replacing spaces and special characters with "_" in Covariate names')
+          params$names[iix] = gsub('\\W+', '_', params$name[iix])
+        }
+        
+        if (!is.null(params$name))
+          {
+            if (any(iix <<- duplicated(params$name)))
+            {
+              warning('Deduping covariate names')
+              params$name = dedup(params$name)
+            }
+          }
+
+        self$names = params$name
+        self$type = params$type
+        self$signature = params$signature
+        self$field = params$field
+        self$pad = params$pad
+        self$log = params$log
+        self$count = params$count
+        self$na.rm = params$na.rm
+    },
+
+    ## Params:
+    ## ... Other Covariates to be merged into this array, note that it can be any number of Covariates
+    ## Return:
+    ## A single Covariate object that contains the contents of self and all passed Covariates
+    ## UI:
+    ## None
+    ## Notes:
+    ## This is linked to the c.Covariate override and the c.Covariate override should be used preferentially over this
+    merge = function(...){
+        return (c(self,...))
+    },
+
+
+    ## Params:
+    ## No params required, included arguments will be ignored.
+    ## Return:
+    ## returns a list of character vectors. If the respective covariate is of class GRanges, the vector will contain all of the chromosome names,
+    ## if it is not of class GRanges, will return NA
+    ## UI:
+    ## None
+    seqlevels = function(...){
+        if(length(private$pCovs) == 0){
+            return(NULL)
+        }
+        seqs = lapply(c(1:length(private$pCovs)), function(x){
+            cov = private$pCovs[[x]]
+            if(class(cov) == 'GRanges'){
+                return(GenomeInfoDb::seqlevels(cov))
+            } else{
+                return(NA)
+            }
+        })
+        return(seqs)
+    },
+
+    ## Params:
+    ## range, a numeric vector of the covariates to include. e.g. if the Covariate contains the covariates (A,B,C) and the range is c(2:3),
+    ## this indicates you wish to get a Covariate containing (B,C). NOTE THAT THIS DOES NOT RETURN A NEW COV_ARR, IT MODIFIES THE CURRENT.
+    ## Return:
+    ## None, this modifies the Covariate on which it was called
+    ## UI:
+    ## None
+    ## Notes:
+    ## If you want to create a new Covariate containing certain covariates, use the '[' operator, e.g. Covariate[2:3]
+    subset = function(range, ...){
+
+      private$pCovs = private$pCovs[range]
+      private$pnames = private$pnames[range]
+      private$ptype = private$ptype[range]
+      private$psignature = private$psignature[range]
+      private$pfield = private$pfield[range]
+      private$ppad = private$ppad[range]
+      private$log = private$plog[range]
+      private$count = private$pcount[range]
+      private$pna.rm = private$pna.rm[range]
+    },
+
+    ## Params:
+    ## No params required, included arguments will be ignored.
+    ## Return:
+    ## A list of lists where each internal list corresponds to the covariate and is for use internally in the annotate.hypotheses function
+    ## The list representation of the covariate will contain the following variables: type, signature, pad, na.rm, field, grep
+    ## UI:
+    ## None
+    toList = function(...){
+        if(length(private$pCovs) == 0){
+            return(list())
+        }
+        out = lapply(c(1:length(private$pCovs)), function(x){
+            return (list(track = private$pCovs[[x]],
+                         type = private$ptype[x],
+                         signature = private$psignature[x],
+                         pad = private$ppad[x],
+                         na.rm = private$pna.rm[x],
+                         field = private$pfield[x],
+                         log = private$plog[x],
+                         count = private$pcount[x]
+                         ))
+        })
+        names(out) = private$pnames
+        return(out)
+
+        },
+
+    ## Params:
+    ## No params required, included arguments will be ignored.
+    ## Return:
+    ## Nothing
+    ## UI:
+    ## Prints information about the Covariate to the console with all of covariates printed in order with variables printed alongside each covariate
+    print = function(...){
+        if(length(private$pCovs) == 0){
+            fmessage('Empty Covariate Object')
+            return(NULL)
+        }
+
+        message('', length(private$pCovs), ' Covariates with features:')
+        print(data.table(
+          name = private$pnames,
+          type = private$ptype,
+          class = sapply(private$pCovs, class),
+          field = private$pfield,
+          signature = private$psignature,
+          na.rm = private$pna.rm,
+          pad = private$ppad,
+          log = private$plog,
+          count = private$pcount
+        ))
+
+        ## out= sapply(c(1:length(private$pCovs)),
+        ##     function(x){
+        ##         cat(c('Covariate Number: ' , x, '\nName: ', grepprivate$pnames[x],
+        ##         '\ntype: ',private$ptype[x], '\tsignature: ', private$psignature[x],
+        ##         '\nfield: ',private$pfield[x], '\tpad: ', private$ppad[x],
+        ##         '\nna.rm: ', private$pna.rm[x], '\tgrep: ', private$pgrep[x],
+        ##         '\nCovariate Class: ', class(private$pCovs[[x]]), '\n\n'), collapse = '', sep = '')
+    }
+    ),
+
+    ## Private variables are internal variables that cannot be accessed by the user
+    ## These variables will have active representations that the user can interact with the update
+    ## and view these variables, all internal manipulations will be done with these private variables
+    private = list(
+      ## The list of covariates, each element can be of class: 'GRanges', 'character', 'RleList', 'ffTrack'
+      pCovs = list(),
+      ## A string vector containing the names of the covariates, the covariate will be refered to by its name in the final table
+      pnames = c(),
+      ## Type is a string vector of types for each covariate, can be: 'numeric','sequence', or 'interval'
+      ptype = c(),
+      ## A vector of signatures for use with ffTrack, se fftab
+      psignature = c(),
+      ## A character vector of field names for use with numeric covariates, see the Covariate class definition for more info
+      pfield = c(),
+      ## A numeric vector of paddings for each covariate, see the 'pad' param in Covariate class definition for more info
+      ppad = c(),
+      ## A logical vector for each covariate, see the 'na.rm' param in Covariate class definition for more info
+      pna.rm = c(),
+      ## logical vector specifying whether to log
+      plog = c(),
+      ## logical vector specifying whether to count
+      pcount = c(),
+      ##  Valid Covariate Types
+      COV.TYPES = c('numeric', 'interval'),
+      ##  Valid Covariate Classes
+      COV.CLASSES = c('GRanges', 'RleList', 'ffTrack', 'character')
+    ),
+
+    ## The active list contains a variable for each private variable.
+    ## Active variables are for user interaction,
+    ## Interactions can be as such
+    ## class$active will call the active variable function with the value missing
+    ## class$active = value will call the active variable function with the value = value
+    active = list(
+
+            ## Covariate Names
+            ## Here we check to make sure that all names are of class chracter and that they are the same length as pCovs -> the internal covariate list
+            ## If the names vector is equal in length to the pCovs list length we will allow the assignment
+            ## If the pCovs list length is a multiple of the names vector, will will replicate the names vector such that it matches in length
+            ## to the pCovs list.
+            names = function(value) {
+
+                if(!missing(value)){
+
+                  if(!is.character(value) && !all(is.na(value)) ){
+                    stop('Error: names must be of class character')
+                  }
+
+                  if(length(value) != length(private$pCovs) & length(private$pCovs) %% length(value) != 0){
+                    stop('Error: Length of names must be of length equal to the number of Covariates or a divisor of number of covariates.')
+                  }
+
+                  if(length(private$pCovs) / length(value) != 1){
+                    private$pnames = rep(value, length(private$pCovs)/length(value))
+                    return(private$pnames)
+                  }
+
+                  if (any(iix <<- grepl('\\W', value)))
+                  {
+                    warning('Replacing spaces and special characters with "_" in provided Covariate names')
+                    value[iix] = gsub('\\W+', '_', value[iix])
+                  }
+
+                  private$pnames = value
+                  return(private$pnames)
+
+                } else{
+                  return(private$pnames)
+                }
+            },
+
+            ## Covariate type
+            ## Here we check to make sure that all types are of class chracter and that they are the same length as pCovs -> the internal covariate list
+            ## We then check to make sure that each type is a valid type as defined by the COV.TYPES private parameter
+            ## If the types vector is equal in length to the pCovs list length we will allow the assignment
+            ## If the pCovs list length is a multiple of the types vector, will will replicate the types vector such that it matches in length
+            ## to the pCovs list.
+            type = function(value) {
+
+                if(!missing(value)){
+                    if(!is.character(value) && !all(is.na(value))){
+                        stop('Error: type must be of class character')
+                    }
+
+                    if(length(value) != length(private$pCovs) & length(private$pCovs) %% length(value) != 0){
+                        stop('Error: Length of type must be of length equal to the number of Covariates or a divisor of number of covariates.')
+                    }
+
+                    if(!all(value %in% private$COV.TYPES)){
+                        stop('"type" must be "numeric", "sequence", or "interval"')
+                    }
+
+                    if(length(private$pCovs) / length(value) != 1){
+                        private$ptype = rep(value, length(private$pCovs)/length(value))
+                        return(private$ptype)
+                    }
+
+                    private$ptype = value
+                    return(private$ptype)
+
+                } else{
+                    return(private$ptype)
+                }
+            },
+
+            ##Covariate Signature
+            ## Here we check to make sure that all signatures are list within lists  and that they are the same length as pCovs -> the internal covariate list
+            ## If the signature vector is equal in length to the pCovs list length we will allow the assignment
+            ## If the pCovs list length is a multiple of the signature vector, will will replicate the signature vector such that it matches in length
+            ## to the pCovs list.
+            signature = function(value) {
+                if(!missing(value)){
+
+                    if(length(value) != length(private$pCovs) & length(private$pCovs) %% length(value) != 0){
+                        stop('Error: Length of signature must be of length equal to the number of Covariates or a divisor of number of covariates.')
+                    }
+                    if(length(private$pCovs) / length(value) != 1){
+                        private$psignature = rep(value, length(private$pCovs)/length(value))
+                        return(private$psignature)
+                    }
+
+                    private$psignature = value
+                    return(private$psignature)
+
+                } else{
+                    return(private$psignature)
+                }
+            },
+
+            ##Covariate Field
+            ## Here we check to make sure that all fields are of class chracter and that they are the same length as pCovs -> the internal covariate list
+            ## If the fields vector is equal in length to the pCovs list length we will allow the assignment
+            ## If the pCovs list length is a multiple of the fields vector, will will replicate the fields vector such that it matches in length
+            ## to the pCovs list.
+            field = function(value) {
+                if(!missing(value)){
+                    if(!is.character(value) && !all(is.na(value))){
+                       stop('Error: field must be of class character')
+                    }
+                    if(length(value) != length(private$pCovs) & length(private$pCovs) %% length(value) != 0){
+                        stop('Error: Length of field must be of length equal to the number of Covariates or a divisor of number of covariates.')
+                    }
+
+                    if(length(private$pCovs) / length(value) != 1){
+                        private$pfield = rep(value, length(private$pCovs)/length(value))
+                        return(private$pfield)
+                    }
+
+                    private$pfield = value
+                    return(private$pfield)
+
+                } else{
+                    return(private$pfield)
+                }
+            },
+
+          ## Covariate log
+          ## Here we check to make sure that all pad are of class numeric and that they are the same length as pCovs -> the internal covariate list
+          ## If the pad vector is equal in length to the pCovs list length we will allow the assignment
+          ## If the pCovs list length is a multiple of the pad vector, will will replicate the pad vector such that it matches in length
+          ## to the pCovs list.
+          log = function(value) {
+            if(!missing(value)){
+              if(!is.logical(value) && !all(is.na(value))){
+                stop("Error: log must be of class logical")
+              }
+              if(length(value) != length(private$pCovs) & length(private$pCovs) %% length(value) != 0){
+                stop("Error: Length of pad must be of length equal to the number of Covariates or a divisor of number of covariates.")
+              }
+              if(length(private$pCovs) / length(value) != 1){
+                private$plog = rep(value, length(private$pCovs)/length(value))
+                return(private$plog)
+              }
+              
+              private$plog = value
+                    return(private$plog)
+              
+            } else{
+              return(private$plog)
+            }
+          },
+          
+          ## Covariate Paddinig
+          ## Here we check to make sure that all pad are of class numeric and that they are the same length as pCovs -> the internal covariate list
+          ## If the pad vector is equal in length to the pCovs list length we will allow the assignment
+          ## If the pCovs list length is a multiple of the pad vector, will will replicate the pad vector such that it matches in length
+          ## to the pCovs list.
+          count = function(value) {
+            if(!missing(value)){
+              if(!is.logical(value) && !all(is.na(value))){
+                stop("Error: count must be of class logical")
+              }
+              if(length(value) != length(private$pCovs) & length(private$pCovs) %% length(value) != 0){
+                stop("Error: Length of count must be of length equal to the number of Covariates or a divisor of number of covariates.")
+              }
+              if(length(private$pCovs) / length(value) != 1){
+                private$pcount = rep(value, length(private$pCovs)/length(value))
+                return(private$pcount)
+              }
+
+              private$pcount = value
+              return(private$pcount)
+
+            } else{
+              return(private$pcount)
+            }
+          },
+
+
+
+            ## Covariate Padding
+            ## Here we check to make sure that all pad are of class numeric and that they are the same length as pCovs -> the internal covariate list
+            ## If the pad vector is equal in length to the pCovs list length we will allow the assignment
+            ## If the pCovs list length is a multiple of the pad vector, will will replicate the pad vector such that it matches in length
+            ## to the pCovs list.
+            pad = function(value) {
+                if(!missing(value)){
+                    if(!is.numeric(value) && !all(is.na(value))){
+                        stop("Error: pad must be of class numeric")
+                    }
+                    if(length(value) != length(private$pCovs) & length(private$pCovs) %% length(value) != 0){
+                        stop("Error: Length of pad must be of length equal to the number of Covariates or a divisor of number of covariates.")
+                    }
+                    if(length(private$pCovs) / length(value) != 1){
+                        private$ppad = rep(value, length(private$pCovs)/length(value))
+                        return(private$ppad)
+                    }
+
+                    private$ppad = value
+                    return(private$ppad)
+
+                } else{
+                    return(private$ppad)
+                }
+            },
+
+
+
+
+            ##Covariate na.rm
+            ## Here we check to make sure that all na.rms are of class logical and that they are the same length as pCovs -> the internal covariate list
+            ## If the na.rms vector is equal in length to the pCovs list length we will allow the assignment
+            ## If the pCovs list length is a multiple of the na.rms vector, will will replicate the na.rms vector such that it matches in length
+            ## to the pCovs list.
+            na.rm = function(value) {
+                if(!missing(value)){
+                    if(!is.logical(value) && !all(is.na(value))){
+                        stop("Error: na.rm must be of class logical")
+                    }
+                    if(length(value) != length(private$pCovs) & length(private$pCovs) %% length(value) != 0){
+                        stop("Error: Length of na.rm must be of length equal to the number of Covariates or a divisor of number of covariates.")
+                    }
+
+                    if(length(private$pCovs) / length(value) != 1){
+                        private$pna.rm = rep(value, length(private$pCovs)/length(value))
+                        return(private$pna.rm)
+                    }
+
+                    private$pna.rm = value
+                    return(private$pna.rm)
+
+                } else{
+                    return(private$pna.rm)
+                }
+            },
+
+           
+
+            ##Covariate Covs
+            data = function(value) {
+                if(!missing(value)){
+                    private$pCovs = value
+                    return(private$pCovs)
+                } else{
+                    return(private$pCovs)
+                }
+            }
+    ),
+)
+
+#' @name c.Covariate
+#' @title title
+#' @description
+#'
+#' Override the c operator for covariates so that you can merge them like a vector
+#'
+#' @param ... A series of Covariates, note all objects must be of type Covariate
+#' @return Covariate object that can be passed directly into the FishHook object constructor that contains all of the Covariate covariates
+#' Passed in the ... param
+#' @author Zoran Z. Gajic
+#' @export
+'c.Covariate' = function(...){
+
+  ##Ensure that all params are of type Covariate
+    Covariates = list(...)
+    isc = sapply(Covariates, function(x)  class(x)[1] == 'Covariate')
+
+    if(any(!isc)){
+        stop('Error: All inputs must be of class Covariate.')
+    }
+
+    ## Merging vars of the covariates
+  names  = unlist(lapply(Covariates, function(x) x$names))
+  type  = unlist(lapply(Covariates, function(x) x$type))
+  signature  = unlist(lapply(Covariates, function(x) x$signature))
+  field  = unlist(lapply(Covariates, function(x) x$field))
+  pad  = unlist(lapply(Covariates, function(x) x$pad))
+  na.rm  = unlist(lapply(Covariates, function(x) x$na.rm))
+  log  = unlist(lapply(Covariates, function(x) x$log))
+  count  = unlist(lapply(Covariates, function(x) x$count))
+
+  ## Merging Covariates
+  covs = lapply(Covariates, function(x) x$data)
+  Covs = unlist(covs, recursive = F)
+
+  ##Creating a new Covariate and assigning all of the merged variables to it
+  ret = Covariate$new(data = Covs, name = names, type = type, signature = signature, field = field, pad = pad, na.rm = na.rm, grep = grep)
+  
+  return(ret)
+}
+
+
+
+#' @name [.Covariate
+#' @title title
+#' @description
+#'
+#' Overrides the subset operator x[] for use with Covariate to allow for vector like subsetting
+#'
+#' @param obj Covariate This is the Covariate to be subset
+#' @param range vector This is the range of Covariates to return, like subsetting a vector. e.g. c(1,2,3,4,5)[3:4] == c(3,4)
+#' @return A new Covariate object that contains only the Covs within the given range
+#' @author Zoran Z. Gajic
+#' @export
+'[.Covariate' = function(obj, range){
+  if (any(is.na(range)))
+    stop('NA in subscripts not allowed')
+
+  if (any(range>length(obj)))
+    stop('Subscript out of bounds')
+
+  ##Clone the object so we don't mess with the original
+  ret = obj$clone()
+  ##Call the subset function of the Covariate class that will modify the cloned Covariate
+  ret$subset(range)
+  return (ret)
+}
+
+
+#' @name names.Covariate
+#' @title title
+#' @description
+#'
+#' Overrides the names function for Covariate object
+#'
+#' @param obj Covariate This is the Covariate whose names we are extracting'
+#' @return names of covariates
+#' @author Zoran Z. Gajic
+#' @export
+'names.Covariate' = function(x){
+    ##Call the subset function of the Covariate class that will modify the cloned Covariate
+    return (x$names)
+}
+
+
+#' @name length.Covariate
+#' @title title
+#' @description
+#'
+#' Overrides the length function 'length(Covariate)' for use with Covariate
+#'
+#' @param obj Covariate object that is passed to the length function
+#' @return number of covariates contained in the Covariate object as defined by length(Covariate$data)
+#' @author Zoran Z. Gajic
+#' @export
+'length.Covariate' = function(obj,...){
+    return(length(obj$data))
+}
+
+
+#' @name covariate
+#' @title covariate
+#' @description
+#'
+#' function to initialize Covariates for passing to FishHook object constructor.
+#'
+#' Can also be initiated by passing a vector of multiple vectors of equal length, each representing one of the internal variable names
+#' You must also include a list containg all of the covariates (Granges, chracters, RLELists, ffTracks)
+#'
+#' Covariate serves to mask the underlieing list implemenations of Covariates in the FishHook Object.
+#' This class attempts to mimic a vector in terms of subsetting and in the future will add more vector like operations.
+#'
+#'
+#' @param name character vector Contains names of the covariates to be created, this should not include the names of any Cov objects passed
+#' @param log  logical flag whether to log output for numeric covariate after averaging [TRUE]
+#' @param count logical flag whether to count the number of intervals (count = TRUE) or aggregate the width (count = FALSE) [TRUE]
+#' @param pad numeric vector Indicates the width to extend each item in the covarite. e.g. if you have a GRanges covariate with two ranges (5:10) and (20:30) with a pad of 5,
+#' These ranges wil become (0:15) and (15:35)
+#' @param type character vector Contains the types of each covariate (numeric, interval, sequencing)
+#' @param signature, see ffTrack, a vector of signatures for use with ffTrack sequence covariates
+#' fftab signature: signatures is a named list that specify what is to be tallied.  Each signature (ie list element)
+#' consist of an arbitrary length character vector specifying strings to %in% (grep = FALSE)
+#' or length 1 character vector to grepl (if grep = TRUE)
+#' or a length 1 or 2 numeric vector specifying exact value or interval to match (for numeric data)
+#' Every list element of signature will become a metadata column in the output GRanges
+#' specifying how many positions in the given interval match the given query
+#' @param field, a chracter vector for use with numeric covariates (NA otherwise) the indicates the column containing the values of that covarites.
+#' For example, if you have a covariate for replication timing and the timings are in the column 'value', the parameter field should be set to the character 'Value'
+#' @param na.rm, logical vector that indicates whether or not to remove nas in the covariates
+#' @param grep, a chracter vector of  grep for use with sequence covariates of class ffTrack
+#' The function fftab is called during the processing of ffTrack sequence covariates grep is used to specify inexact matches (see fftab)
+#' @param data, a list of covariate data that can include any of the covariate classes (GRanges, ffTrack, RleList, character)
+#' @return Covariate object that can be passed directly to the FishHook object constructor
+#' @author Zoran Z. Gajic
+#' @import R6
+#' @export
+covariate = function(data = NULL, field = as.character(NA), name = as.character(NA), log = TRUE, count = TRUE, pad = 0, type = as.character(NA),
+               signature = as.character(NA), na.rm = NA, grep = NA){
+  Covariate$new(name = name, data = data, pad = pad, type = type, count = count, log = log, signature = signature,
+                field = field, na.rm = na.rm, grep = grep)
+}
+
+
+
+#' @name dunlist
+#' @title dunlist
+#' @description
+#'
+#' Utility function to unlist a list into a data.table
+#'
+#' @param x list
+dunlist = function (x) 
+{
+    listid = rep(1:length(x), elementNROWS(x))
+    if (!is.null(names(x))) 
+        listid = names(x)[listid]
+    xu = unlist(x, use.names = FALSE)
+    if (is.null(xu)) {
+        return(as.data.table(list(listid = c(), V1 = c())))
+    }
+    if (!(inherits(xu, "data.frame")) | inherits(xu, "data.table")) 
+        xu = data.table(V1 = xu)
+    out = cbind(data.table(listid = listid), xu)
+    setkey(out, listid)
+    return(out)
+}
+
+
+################################
+#' @name dedup
+#' @title dedup
+#'
+#' @description
+#' relabels duplicates in a character vector with .1, .2, .3
+#' (where "." can be replaced by any user specified suffix)
+#'
+#' @param x input vector to dedup
+#' @param suffix suffix separator to use before adding integer for dups in x
+#' @return length(x) vector of input + suffix separator + integer for dups and no suffix for "originals"
+#' @author Marcin Imielinski
+################################
+dedup = function(x, suffix = '.')
+{
+  dup = duplicated(x);
+  udup = setdiff(unique(x[dup]), NA)
+  udup.ix = lapply(udup, function(y) which(x==y))
+  udup.suffices = lapply(udup.ix, function(y) c('', paste(suffix, 2:length(y), sep = '')))
+  out = x;
+  out[unlist(udup.ix)] = paste(out[unlist(udup.ix)], unlist(udup.suffices), sep = '');
+  return(out)
+}
