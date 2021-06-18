@@ -225,7 +225,7 @@ find_multi_modes <- function(granges, x.field = "start", y.field = "score", w = 
     which.chr = seqlevels(granges)
     x = x = gr2dt(granges)$start
     y = values(granges)[, y.field]
-    n <- length(y)
+    n - length(y)
     y.smooth <- loess(y ~ x, span = 0.1)$fitted
     y.max <- rollapply(zoo(y.smooth), 2*w+1, max, align="center")
     delta <- y.max - y.smooth[-c(1:w, n+1-1:w)]
@@ -248,30 +248,109 @@ find_multi_modes <- function(granges, x.field = "start", y.field = "score", w = 
 #' a chromosome transition matrix which then lands you on a coordinate that is also chosen from a kernel. 
 #' x
 #' @param binsets GRanges of bins with fields seqnames, start, end, and $bid specifying binset id
+#' @param resolution the resolution to use for distance simulation
 #' @param n integer scalar specifying number of sets to sample (default = nrow(binsets))
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
-background = function(binsets, n = nrow(binsets), pseudocount = 1, verbose = TRUE, mc.cores = 20)
+background = function(binsets, n = nrow(binsets), pseudocount = 1, verbose = TRUE, mc.cores = 20, resolution = 5e4, gg=NULL, interchromosomal.dist = 1e8, interchromosomal.table = NULL)
 {
   if (!length(binsets))
     stop('empty binsets')
 
   ## sort from left to right
-  binsets = gr2dt(binsets)
-  setkeyv(binsets, c('seqnames','start', 'end'))
+  ## binsets = gr2dt(binsets)
+  ## setkeyv(binsets, c('seqnames','start', 'end'))
 
   if (verbose) smessage('Making kernels')
 
   ## populate data for kernels
+####
+  ## Approach to put all dostances in one bag
+  binsets$binid = 1:length(binsets)
+  if (is.null(gg))
+  {
+    distance.kernel = gr2dt(binsets)[, as.data.table(expand.grid(i = binid, j = binid))[i<j, ], by = bid] %>% setkeyv(c('i', 'j'))
+    distance.kernel[, val := GenomicRanges::distance(binsets[i], binsets[j])]
+  } else {
+    if (verbose) smessage('Using graph distance')
+######
+    distance.kernel = gr2dt(binsets)[, as.data.table(expand.grid(i = binid, j = binid))[i<j, ], by = bid] %>% setkeyv(c('i', 'j'))
+    distance.kernel[, val := GenomicRanges::distance(binsets[i], binsets[j])]
+    distance.kernel.intra = distance.kernel[!is.na(val)]    
+####
+    gg = gg$copy$disjoin(disjoin(binsets))
+    
+    binsetd = data.table(binid = binsets$binid, bid = binsets$bid) %>% setkey('binid')
+    binsetd[, gid := gr.match(binsets, gr.chr(gg$nodes$gr))] ## will streamline distance computation to get index
+    distance.kernel.g = pbmclapply(unique(binsetd$bid), function(this.bid){
+        this.dist = tryCatch(gg$dist(binsetd[bid == this.bid, gid]) %>% melt %>% as.data.table %>% setnames(., c('gi', 'gj', 'val')),
+                             error = function(e) NULL)
+        if(!is.null(this.dist)){
+            this.dist[, bid := as.factor(this.bid)]
+            return(this.dist)
+         }
+    }, mc.cores = mc.cores) %>% rbindlist
+    distance.kernel = merge(distance.kernel.g, binsetd, by.x = c("gi", "bid"), by.y = c("gid", "bid"), allow.cartesian=TRUE)
+    setnames(distance.kernel, "binid", "i")
+    distance.kernel = merge(distance.kernel, binsetd, by.x = c("gj", "bid"), by.y = c("gid", "bid"), allow.cartesian=TRUE)
+    setnames(distance.kernel, "binid", "j")
+    distance.kernel = unique(distance.kernel[, .(bid, i, j, val)][i<j])
+    distance.kernel = merge(distance.kernel, distance.kernel.intra, by = c("bid", "i", "j"), all.x = T)
+    distance.kernel[, val := ifelse(val.x <= 1, val.y, val.x)]  
+    distance.kernel[, val := round_any(val, resolution, f = ceiling)]
+    distance.kernel = distance.kernel[, .(bid, i , j, val)]  
+    setkeyv(distance.kernel, c('i', 'j'))
+  }
+
+  if (!is.null(interchromosomal.table)){
+      interchromosomal.table[, dist := round_any(dist, resolution)]
+      distance.kernel = merge(distance.kernel, gr2dt(binsets)[, .(seqnames, binid)], by.x = "i", by.y = "binid")
+      distance.kernel = merge(distance.kernel, gr2dt(binsets)[, .(seqnames, binid)], by.x = "j", by.y = "binid")
+      setnames(distance.kernel, c("seqnames.x", "seqnames.y"), c("V1", "V2"))
+      distance.kernel = merge(distance.kernel, interchromosomal.table, by = c("V1", "V2"), all.x = T)
+      distance.kernel[, val := ifelse(is.na(val), dist, val)]
+      distance.kernel = distance.kernel[, .(j,   i,  bid, val)]
+      distance.kernel[, val := ifelse(is.na(val), max(interchromosomal.table$dist), val)]
+      setkeyv(distance.kernel, c('i', 'j'))
+  } else {
+      ## distance.kernel[is.infinite(val), val := interchromosomal.dist]
+      ## distance.kernel[is.na(val), val := interchromosomal.dist]
+      distance.kernel = distance.kernel[!is.infinite(val)]
+      distance.kernel = distance.kernel[!is.na(val)] 
+  }
+
+  ## distance.kernel[is.na(val), val := interchromosomal.dist]
+  
+  ####
+  binsets = gr2dt(binsets)
+  setkeyv(binsets, c('seqnames','start', 'end'))
+
+  ####
   ends.kernel = binsets[, .(val = max(end)), by = .(seqnames, bid)] %>% setkey('seqnames')
-  distance.kernel = binsets[, .(val = start-shift(end)), by = .(seqnames, bid)][!is.na(val), ] %>% setkey('seqnames')
-  width.kernel = binsets[, .(seqnames, val = width)] %>% setkey('seqnames')
+  ends.kernel[, freq := .N, by = seqnames]
+  if (any(ends.kernel[, freq] == 1)){
+      ends.kernel = rbind(ends.kernel[freq == 1], ends.kernel) %>% setkey('seqnames')
+  }
 
+####
+  ## distance.kernel = binsets[, .(val = start - (data.table::shift(end))), by = .(seqnames, bid)][!is.na(val), ] %>% setkey('seqnames')
+  ##distance.kernel[, val := ifelse(is.na(val), 0, val)] %>% setkey('seqnames')
+  ## distance.kernel[, freq := .N, by = .(seqnames, bid)]
+  ## distance.kernel =  rbind(distance.kernel[freq == 1], distance.kernel) %>% setkey('seqnames')
+  
+  ####
+  width.kernel = binsets[, .(seqnames, val = width)] ## %>% setkey('seqnames')
+  ## width.kernel[, freq := .N, by = seqnames]
+  ## width.kernel = rbind(width.kernel[freq == 1], width.kernel)%>% setkey('seqnames')
+  
   ends.bw =  ends.kernel[, .(bw = density(val)$bw), keyby = seqnames]
-  distance.bw =  distance.kernel[, .(bw = density(val)$bw), keyby = seqnames]
-  width.bw =  width.kernel[, .(bw = density(val)$bw), keyby = seqnames]
 
+  ## distance.bw =  distance.kernel[, .(bw = density(val)$bw), keyby = seqnames]
+  ## width.bw =  width.kernel[, .(bw = density(val)$bw), keyby = seqnames]
 
+  distance.bw =  distance.kernel[, .(bw = density(val)$bw)]
+  width.bw =  width.kernel[, .(bw = density(val)$bw)]
+  
   if (verbose) smessage('Making transition matrices')
 
   ## populate cardinality 
@@ -281,33 +360,46 @@ background = function(binsets, n = nrow(binsets), pseudocount = 1, verbose = TRU
   chrom.multinomial = binsets[, .(count = .N + pseudocount), by = seqnames][, .(seqnames, prob = count / sum(count))] %>% setkey('seqnames')
 
   ## populate chrom multi-nomial and chr-chr transition matrix
-  chrom.transition = merge(binsets, binsets, by = 'bid', allow.cartesian = TRUE)[, .(count = .N + pseudocount), by = .(seqnames.x, seqnames.y)][, .(seqnames.y, prob = count / sum(count)), keyby = .(seqnames.x)] 
 
+  chrom.transition = merge(binsets, binsets, by = 'bid', allow.cartesian = TRUE)[, .(count = .N + pseudocount), by = .(seqnames.x, seqnames.y)][, .(seqnames.y, prob = count / sum(count)), keyby = .(seqnames.x)] 
+  
+  ## chrom.transition = merge(binsets, binsets, by = 'bid', allow.cartesian = TRUE)[, .(count = .N + pseudocount), by = .(seqnames.x, seqnames.y)]
+  ## chrom.transition[, exclude := ifelse(seqnames.x %in% unique(distance.kernel$seqnames), FALSE, TRUE)]
+  ## chrom.transition[, count := ifelse(exclude & seqnames.x == seqnames.y, 0, count)]
+  ## chrom.transition = chrom.transition[, .(seqnames.y, prob = count / sum(count)), keyby = .(seqnames.x)]
+  ## chrom.transition[, prob := ifelse(is.nan(prob), 0, prob)]
+  ## chrom.transition[, sum.p := sum(prob), by = seqnames.x]
+  ## chrom.transition = chrom.transition[sum.p > 0]
+  
+  
   if (verbose) smessage('Generating random sets')
   out = pbmclapply(1:n, mc.cores = mc.cores, function(i)
   {
     cardinality = cardinality.multinomial[, sample(cardinality, 1, prob = prob)]
     binset = data.table(bid = i, seqnames = chrom.multinomial[, sample(seqnames, prob = prob, 1)])
     binset$end = rdens(1, ends.kernel[.(binset$seqnames), val], width = ends.bw[.(binset$seqnames), bw])
-    binset$start = binset$end - rdens(1, width.kernel[.(binset$seqnames), val], width = width.bw[.(binset$seqnames), bw])
+    binset$start = binset$end - round_any(rdens(1, width.kernel[, val], width = width.bw[, bw]),resolution) 
     for (k in setdiff(1:cardinality, 1))
     {
       lastchrom = tail(binset$seqnames, 1)
       laststart = tail(binset$start, 1)
       newchrom = chrom.transition[.(lastchrom), sample(seqnames.y, 1, prob = prob)]
+      ##print(as.character(newchrom))
       if (newchrom == lastchrom)
       {
         newbin = data.table(bid = i,
                             seqnames = newchrom,
-                            end = laststart - rdens(1, distance.kernel[.(newchrom), val], width = distance.bw[.(newchrom), bw]))
-        newbin[, start := end - rdens(1, width.kernel[.(newchrom), val], width = width.bw[.(newchrom), bw])]
+                            end = laststart - round_any(rdens(1, distance.kernel[, val], resolution, width = distance.bw[, bw]), resolution))
+        newbin[, start := end - round_any(rdens(1, width.kernel[, val], width = width.bw[, bw]), resolution)]
+        ##print(newbin)
       }
       else
       {
         newbin = data.table(bid = i,
                             seqnames = newchrom,
                             end = rdens(1, ends.kernel[.(newchrom), val], width = ends.bw[.(newchrom), bw]))
-        newbin[, start := end - rdens(1, width.kernel[.(newchrom), val], width = width.bw[.(newchrom), bw])]
+        newbin[, start := end - round_any(rdens(1, width.kernel[, val], width = width.bw[, bw]), resolution)]
+        ##print(newbin)
       }
       binset = rbind(binset, newbin, fill = TRUE)
     }
@@ -317,6 +409,7 @@ background = function(binsets, n = nrow(binsets), pseudocount = 1, verbose = TRU
   ## fix coordinates
   out[, start := pmax(1, ceiling(start))]
   out[, end := pmax(1, ceiling(end))]
+  out = gr2dt(dt2gr(out))
   return(out)
 }
 
@@ -346,7 +439,7 @@ rdens = function(n, values, width = NULL, kernel="gaussian") {
 #' Given n binsets annotates their k-power set (i.e. all sets in the power set with cardinality <= k) with
 #' basic (min median max distance, cardinality, width) and optional numerical and interval covariates provided as input.
 #' 
-#' @param binsets GRanges of bins with fields $bsid specifying binset id
+#' @param binsets GRanges of bins with fields $bid specifying binset id
 #' @param concatemers GRanges of monomers with fields seqnames, start, end, and $cid specifying concatemer id, which will be counted across each binset
 #' @param covariates Covariate object specifying numeric or interval covariates to merge with this binset
 #' @param k the max cardinality of sets to annotate from the power set of each binmer
@@ -357,86 +450,156 @@ rdens = function(n, values, width = NULL, kernel="gaussian") {
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
 #' @return data.table of sub-binsets i.e. k-power set of binsets annotated with $count field representing covariates, ready for fitting, **one row per binset
-annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromosomal.dist = 1e8, gg = NULL, mc.cores = 20, numchunks = 2*mc.cores-1, seed = 42, verbose = TRUE)
+annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromosomal.dist = 1e8, interchromosomal.table = NULL, gg = NULL, mc.cores = 20, numchunks = 2*mc.cores-1, seed = 42, verbose = TRUE, unique.per.setid = TRUE, resolution = 5e4)
 {
   set.seed(seed)
   if (!inherits(binsets, 'GRanges'))
     binsets = dt2gr(binsets)
 
   binsets = gr.stripstrand(binsets)
-
+  binsets$bid = as.factor(binsets$bid)
   ## each row of binsets is a bin
   binsets$binid = 1:length(binsets)
-
   #####
   ## frontload / batch some useful calculations
   #####
-
   ## bin vs concatemer overlaps
   if (verbose) smessage('Overlapping ', length(binsets), ' bins with ', length(concatemers), ' monomers')
   ov = binsets %*% concatemers[, 'cid'] %>% as.data.table
-
+  ##
   if (verbose) smessage('Computing bin by bin pairwise distance')
   ## bin x bin pairwise distance within each set
   if (is.null(gg))
   {
     bindist = gr2dt(binsets)[, as.data.table(expand.grid(i = binid, j = binid))[i<j, ], by = bid] %>% setkeyv(c('i', 'j'))
     bindist[, distance := GenomicRanges::distance(binsets[i], binsets[j])]
-  }
-  else
-  {
+  } else {
     if (verbose) smessage('Using graph distance')
+######
+    bindist = gr2dt(binsets)[, as.data.table(expand.grid(i = binid, j = binid))[i<j, ], by = bid] %>% setkeyv(c('i', 'j'))
+    bindist[, distance := GenomicRanges::distance(binsets[i], binsets[j])]
+    bindist.intra = bindist[!is.na(distance)]    
+######
     gg = gg$copy$disjoin(disjoin(binsets))
-    
-    binsetd = data.table(binid = binsets$binid, bid = binsets$bid) %>% setkey('bid')
-    binsetd[, gid := gr.match(binsets, gg$nodes)] ## will streamline distance computation to get index
-    bindist = pbmclapply(unique(bindsetd$bid), function(bid)
-      gg$dist(binsetl[.(bid), gid]) %>% melt %>% as.data.table %>% setnames('i', 'j', 'distance')[i<j, ][, bid := bid], mc.cores = mc.cores) %>% rbindlist      
+    binsetd = data.table(binid = binsets$binid, bid = binsets$bid) %>% setkey('binid')
+    binsetd[, sun.bin.id := 1:.N, by = bid]
+
+    ## binsetd[, gid := gr.match(binsets, gr.chr(gg$nodes$gr))]
+    ## will streamline distance computation to get index
+    ## bindist.g = pbmclapply(unique(binsetd$bid), function(this.bid){
+    ##     this.dist = tryCatch(gg$dist(binsetd[bid == this.bid, gid]) %>% melt %>% as.data.table %>% setnames(., c('gi', 'gj', 'distance')),
+    ##                          error = function(e) NULL)
+    ##     if(!is.null(this.dist)){
+    ##         this.dist[, bid := as.factor(this.bid)]
+    ##         return(this.dist)
+    ##      }
+    ## }, mc.cores = mc.cores) %>% rbindlist
+    ## bindist = merge(bindist.g, binsetd, by.x = c("gi", "bid"), by.y = c("gid", "bid"), allow.cartesian=TRUE)
+    ## setnames(bindist, "binid", "i")
+    ## bindist = merge(bindist, binsetd, by.x = c("gj", "bid"), by.y = c("gid", "bid"), allow.cartesian=TRUE)
+    ## setnames(bindist, "binid", "j")
+    ## bindist = unique(bindist[, .(bid, i, j, distance)][i<j])
+    ## bindist = merge(bindist, bindist.intra, by = c("bid", "i", "j"), all.x = T)
+    ## bindist[, distance := ifelse(distance.x <= 1, distance.y, distance.x)]  
+    ## bindist[, distance := round_any(distance, resolution)]
+    ## bindist = bindist[, .(bid, i , j, distance)]  
+    ## ## bindist[, distance := ifelse(distance < resolution, resolution, distance)]
+    ## setkeyv(bindist, c('i', 'j'))
+
+    ## Better approach to get graph distances, need further testing
+    bindist.g = pbmclapply(unique(binsetd$bid), function(this.bid){
+        this.dist = tryCatch(gg$dist(gr.nochr(binsets[binsetd[bid == this.bid, binid]])) %>% melt %>% as.data.table %>% setnames(., c('gi', 'gj', 'distance')), error = function(e) NULL)
+        if(!is.null(this.dist)){
+            this.dist[, bid := as.factor(this.bid)]
+            return(this.dist)
+        }
+    }, mc.cores = mc.cores) %>% rbindlist
+    bindist = merge(bindist.g, binsetd, by.x = c("gi", "bid"), by.y = c("sun.bin.id", "bid"), allow.cartesian=TRUE)
+    setnames(bindist, "binid", "i")
+    bindist = merge(bindist, binsetd, by.x = c("gj", "bid"), by.y = c("sun.bin.id", "bid"), allow.cartesian=TRUE)
+    setnames(bindist, "binid", "j")
+    bindist = unique(bindist[, .(bid, i, j, distance)][i<j])
+    bindist = merge(bindist, bindist.intra, by = c("bid", "i", "j"), all.x = T)
+    bindist[, distance := ifelse(distance.x <= 1, distance.y, distance.x)]  
+    ## bindist[, distance := round_any(distance, resolution)]
+    bindist = bindist[, .(bid, i , j, distance)]  
+    ## bindist[, distance := ifelse(distance < resolution, resolution, distance)]
+    setkeyv(bindist, c('i', 'j'))
   }
-  bindist[is.infinite(distance), distance := interchromosomal.dist]
-  
-  #####
+  if (!is.null(interchromosomal.table)){
+      interchromosomal.table[, dist := round_any(dist, resolution)]
+      bindist = merge(bindist, gr2dt(binsets)[, .(seqnames, binid)], by.x = "i", by.y = "binid")
+      bindist = merge(bindist, gr2dt(binsets)[, .(seqnames, binid)], by.x = "j", by.y = "binid")
+      setnames(bindist, c("seqnames.x", "seqnames.y"), c("V1", "V2"))
+      bindist = merge(bindist, interchromosomal.table, by = c("V1", "V2"), all.x = T)
+      bindist[, distance := ifelse(is.na(distance), dist, distance)]
+      bindist = bindist[, .(j,   i,  bid,    distance)]
+      bindist[, distance := ifelse(is.na(distance), max(interchromosomal.table$dist), distance)]
+      setkeyv(bindist, c('i', 'j'))
+  } else {
+      bindist[is.infinite(distance), distance := interchromosomal.dist]
+      bindist[is.na(distance), distance := interchromosomal.dist]
+  }
+#####
   ## now start annotating sub.binsets aka sets
   #####
-
   if (verbose) smessage('Making sub binsets')
   ## make all sub power sets up to k for all bids
   ## each row is now a binid with a setid and bid
-  sub.binsets = gr2dt(binsets)[, powerset(binid, 2, k), by = bid] %>% setnames(c('bid', 'setid', 'binid')) %>% setkey(bid)
+  ## adding ones for sum.cov to be removed later
+  sub.binsets = gr2dt(binsets)[, powerset(binid, 1, k), by = bid] %>% setnames(c('bid', 'setid', 'binid')) %>% setkey(bid)
   sub.binsets[, ":="(iid = 1:.N, tot = .N), by = .(setid, bid)] ## label each item in each sub-binset, and total count will be useful below
 
   if (verbose) smessage('Made ', nrow(sub.binsets), ' sub-binsets')
 
   ## first use ov to count how many concatemers fully overlap all the bins in the subbinset
   if (verbose) smessage('Counting concatemers across sub-binsets across ', mc.cores, ' cores')
-  counts = unique(sub.binsets[, .(bid, setid)])[, count := 0]
+  ref.counts = unique(sub.binsets[, .(bid, setid)])[, count := 0]
   if (nrow(ov))
     {
       ubid = unique(sub.binsets$bid) ## split up to lists to leverage pbmclapply
       ubidl = split(ubid, ceiling(runif(length(ubid))*numchunks)) ## randomly chop up ubid into twice the number of mc.coreso
       counts = pbmclapply(ubidl, mc.cores = mc.cores, function(bids)
       {
-        out = merge(sub.binsets[.(bids), ], ov, by = c('binid', 'bid'), allow.cartesian = TRUE)
-        if (nrow(out))
-          out[, .(hit = all(1:tot[1] %in% iid)), by = .(cid, setid, bid)][, .(count = sum(hit, na.rm = TRUE)), by = .(setid, bid)]
-        else
-          NULL
+        out = merge(sub.binsets[.(as.factor(bids)), ], ov, by = c('binid', 'bid'), allow.cartesian = TRUE)
+        if (nrow(out)){
+            if (unique.per.setid){
+                this.step1 = out[, .(hit = all(1:tot[1] %in% iid)), by = .(cid, setid, bid, tot)][hit == TRUE]
+                setkeyv(this.step1, c("bid", "cid", "tot"))
+                this.step1 = this.step1[, tail(.SD, 1), by = .(cid, bid)]
+                this.counts = this.step1[, .(count = sum(hit, na.rm = TRUE)), by = .(setid, bid)]
+                this.counts = merge(ref.counts[bid %in% bids], this.counts, by = c("bid", "setid"), all.x = T)
+                this.counts[, count := sum(count.x, count.y, na.rm = T), by = .(bid, setid)][, .(bid, setid, count)]
+            } else {
+                out[, .(hit = all(1:tot[1] %in% iid)), by = .(cid, setid, bid)][, .(count = sum(hit, na.rm = TRUE)), by = .(setid, bid)]
+            }
+        } else {
+            NULL
+        }
       })  %>% rbindlist
     }
-   
+  
   ## other goodies
+  ## changing to mean instead of median
   if (verbose) smessage('Computing min median max distances per setid')
-  dists = sub.binsets[, bindist[as.data.table(expand.grid(i = binid, j = binid))[i<j, ], .(dist = c('min.dist', 'median.dist', 'max.dist'), value = quantile(distance+1,  c(0, 0.5, 1)))], by = .(setid, bid)] %>% dcast(bid + setid ~ dist, value.var = 'value')
+  dists = sub.binsets[, bindist[as.data.table(expand.grid(i = binid, j = binid))[i<j, ], .(dist = c('min.dist', 'mean.dist', 'max.dist'), value = as.numeric(summary(distance+1, na.rm = T)[c(1, 4, 6)]))], by = .(setid, bid)] %>% dcast(bid + setid ~ dist, value.var = 'value')
+
+  if (verbose) smessage('Computing marginal sum per bid')
+  margs = counts[, .(sum.counts = sum(count)), by = .(bid)]
 
   if (verbose) smessage('Computing total width and cardinality per setid')
   widths = sub.binsets[, .(width = sum(width(binsets)[binid])+1, cardinality = .N), by = .(bid, setid)]
+
 
   if (verbose) smessage('Merging counts, distance, and width')
   annotated.binsets = unique(sub.binsets[, .(bid, setid)]) %>%
     merge(counts, by = c('bid', 'setid')) %>%
     merge(dists, all.x = TRUE, by = c('bid', 'setid')) %>%
-    merge(widths, all.x = TRUE, by = c('bid', 'setid'))
+    merge(widths, all.x = TRUE, by = c('bid', 'setid')) %>%
+    merge(margs, all.x = TRUE, by = c('bid'))  
 
+  annotated.binsets = annotated.binsets[cardinality > 1]
+  
   ## now cycle through interval / numeric covariates
   if (!is.null(covariates))
   {
@@ -516,18 +679,19 @@ powerset = function(set, min.k = 1, max.k = 5)
 fit = function(annotated.binsets, nb = TRUE, return.model = TRUE, verbose = TRUE, maxit = 50)
 {
   if (!nb) stop('not yet supported')
- 
+  ## added sumcounts as cov and width as only offset
   covariates = setdiff(names(annotated.binsets), c('bid', 'setid', 'width', 'count'))
   fmstring = paste('count ~', paste(paste0('log(', covariates, ')', collapse = ' + ')))
   fmstring = paste0(fmstring, " + ", "offset(log(width))")
   fm = formula(fmstring)
-
+##
   model = tryCatch(glm.nb(formula = fm, data = annotated.binsets, control = glm.control(maxit = 50)), error = function(e) NULL)
 
   return(list(model = model, covariates = covariates))
 }
 
-#' @name score
+
+#' @name sscore
 #' @description
 #'
 #' Takes as input annotated binsets and a model and returns each binset scored according to the model
@@ -539,7 +703,7 @@ fit = function(annotated.binsets, nb = TRUE, return.model = TRUE, verbose = TRUE
 #' @return annotated.binsets with additional fields $p and $count.predicted specifying predicted count at each binset
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
-score = function(annotated.binsets, model, verbose = TRUE)
+sscore = function(annotated.binsets, model, verbose = TRUE)
 {
   if (is.null(annotated.binsets$count))
     stop('annotated.binsets need to have $count column, did you forget to annotate?')
@@ -576,7 +740,7 @@ score = function(annotated.binsets, model, verbose = TRUE)
 #' @param verbose logical flag whether to fit
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
-synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL, covariates = NULL, annotated.binsets = NULL, k = 5, gg = NULL, mc.cores = 20, verbose = TRUE)
+synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL, covariates = NULL, annotated.binsets = NULL, k = 5, gg = NULL, mc.cores = 20, verbose = TRUE, resolution = 5e4)
 {
   if (!inherits(binsets, 'GRanges'))
     {
@@ -587,29 +751,32 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
 
   if (is.null(background.binsets) & is.null(model))
   {
-    if (verbose) fmessage('Computing random background binsets using features of provided binsets')
-    background.binsets = background(binsets, mc.cores = mc.cores)
+    if (verbose) smessage('Computing random background binsets using features of provided binsets')
+    background.binsets = background(binsets, n = 1500, mc.cores = mc.cores, resolution = resolution)
+    background.binsets = background.binsets[!bid %in% background.binsets[width < resolution]$bid]
   }
   
   if (is.null(model))
   {
-    if (verbose) fmessage('Annotating k-power sets of background binsets using features and covariates')
-    annotated.backround.binsets = annotate(binsets = background.binsets, concatemers = concatemers, covariates = covariates, k = k, mc.cores = mc.cores, verbose = verbose)
+    if (verbose) smessage('Annotating k-power sets of background binsets using features and covariates')
+    annotated.background.binsets = annotate(binsets = background.binsets, concatemers = concatemers, gg = gg, covariates = covariates, k = k, mc.cores = mc.cores, verbose = verbose)
 
-    if (verbose) fmessage('Fitting model to k-power sets of annotated background binsets')
+    if (verbose) smessage('Fitting model to k-power sets of annotated background binsets')
     model = fit(annotated.background.binsets, nb = TRUE, return.model = TRUE, verbose = verbose)
   }
 
   if (is.null(annotated.binsets))
-    annotated.binsets = annotate(binsets = binsets, concatemers = concatemers, covariates = covariates, k = k, mc.cores = mc.cores, verbose = verbose)
+    annotated.binsets = annotate(binsets = binsets, concatemers = concatemers, covariates = covariates, k = k, gg = gg, mc.cores = mc.cores, verbose = verbose)
 
-  scored.binsets = score(annotated.binsets, model, verbose = verbose)
+  ## browser()
+  if (verbose) smessage('Scoring binsets')
+  scored.binsets = sscore(annotated.binsets, model, verbose = verbose)
 
   scored.binsets[, multiway := cardinality > 2]
   setkey(scored.binsets, bid)
   ubid = unique(scored.binsets$bid)
 
-  res = pbmclapply(ubid, function(this.bid) muffle(dflm(glm.nb(data = scored.binsets[.(this.bid),], count ~ multiway + offset(log(count.predicted))))[2, ][, name := this.bid])) %>% rbindlist
+  res = pbmclapply(ubid, function(this.bid) muffle(dflm(glm.nb(data = scored.binsets[.(this.bid),], count ~ multiway + offset(log(count.predicted)), control = glm.control(maxit = 50)))[2, ][, name := this.bid])) %>% rbindlist
   setnames(res, 'name', 'bid')
 
   return(res)
@@ -1140,9 +1307,16 @@ Covariate = R6::R6Class('Covariate',
     public = list(
 
       ## See the class documentation
-      initialize = function(data = NULL, field = as.character(NA), name = as.character(NA),log = FALSE, count = TRUE, 
-                            pad = 0, type = 'numeric', signature = as.character(NA),
-                            na.rm = as.logical(NA), grep = as.logical(NA)){
+        initialize = function(data = NULL,
+                              field = as.character(NA),
+                              name = as.character(NA),
+                              log = FALSE,
+                              count = TRUE, 
+                              pad = 0,
+                              type = 'numeric',
+                              signature = as.character(NA),
+                              na.rm = as.logical(NA),
+                              grep = as.logical(NA)){
 
         ##If data are valid and are a list of tracks concatenate with any premade covs
         if(is.null(data))
@@ -1301,8 +1475,8 @@ Covariate = R6::R6Class('Covariate',
       private$psignature = private$psignature[range]
       private$pfield = private$pfield[range]
       private$ppad = private$ppad[range]
-      private$log = private$plog[range]
-      private$count = private$pcount[range]
+      private$plog = private$plog[range]
+      private$pcount = private$pcount[range]
       private$pna.rm = private$pna.rm[range]
     },
 
