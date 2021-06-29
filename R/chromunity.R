@@ -767,7 +767,7 @@ shave_concatemers = function(concatemers, cthresh = 3, bthresh = 2, verbose = TR
   while (length(new)<length(old))
   {
     if (verbose)
-      cmessage('Diff: ', length(old)-length(new), ', Old: ', length(old), ', New:', length(new))
+      cmessage('shaving --> Diff: ', length(old)-length(new), ', Old: ', length(old), ', New:', length(new))
     old = new;
     new = .shave(old, bthresh = bthresh, cthresh = cthresh)
   }
@@ -862,7 +862,7 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
   nbin = reads2$binid %>% unique %>% length
   
   if (size > max.size)
-    stop(sprintf('size %s of the problem %s with %s concatemers and %s bins  exceeds max.size %s, please considering subsampling concatemers, using fewer windows or bins, or shaving concatemers with more aggressive parameters (bthresh, cthresh)'), size, ifelse(shave, 'after shaving', ''), ncat, nbin, max.size)
+    stop(sprintf('size %s of the problem %s with %s concatemers and %s bins  exceeds max.size %s, please considering subsampling concatemers, using fewer windows or bins, or shaving concatemers with more aggressive parameters (bthresh, cthresh)', size, ifelse(shave, 'after shaving', ''), ncat, nbin, max.size))
 
 
   ## all pairs of concatemers that share a bin
