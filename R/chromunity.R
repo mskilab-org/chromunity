@@ -23,6 +23,7 @@ globalVariables(c("::", ":::", "num.memb", "community", "max.local.dist", "read_
 
 
 
+
 ## ##############################
 ## ## chromunity
 ## ##############################
@@ -225,7 +226,7 @@ find_multi_modes <- function(granges, x.field = "start", y.field = "score", w = 
     which.chr = seqlevels(granges)
     x = x = gr2dt(granges)$start
     y = values(granges)[, y.field]
-    n - length(y)
+    n = length(y)
     y.smooth <- loess(y ~ x, span = 0.1)$fitted
     y.max <- rollapply(zoo(y.smooth), 2*w+1, max, align="center")
     delta <- y.max - y.smooth[-c(1:w, n+1-1:w)]
@@ -271,6 +272,7 @@ background = function(binsets, n = nrow(binsets), pseudocount = 1, verbose = TRU
   {
     distance.kernel = gr2dt(binsets)[, as.data.table(expand.grid(i = binid, j = binid))[i<j, ], by = bid] %>% setkeyv(c('i', 'j'))
     distance.kernel[, val := GenomicRanges::distance(binsets[i], binsets[j])]
+    distance.kernel = distance.kernel[j-i==1]
   } else {
     if (verbose) smessage('Using graph distance')
 ######
@@ -378,7 +380,8 @@ background = function(binsets, n = nrow(binsets), pseudocount = 1, verbose = TRU
     cardinality = cardinality.multinomial[, sample(cardinality, 1, prob = prob)]
     binset = data.table(bid = i, seqnames = chrom.multinomial[, sample(seqnames, prob = prob, 1)])
     binset$end = rdens(1, ends.kernel[.(binset$seqnames), val], width = ends.bw[.(binset$seqnames), bw])
-    binset$start = binset$end - round_any(rdens(1, width.kernel[, val], width = width.bw[, bw]),resolution) 
+    binset$start = binset$end - round_any(rdens(1, width.kernel[, val], width = width.bw[, bw]),resolution)
+    ## binset$start = binset$end - rdens(1, width.kernel[, val], width = width.bw[, bw])
     for (k in setdiff(1:cardinality, 1))
     {
       lastchrom = tail(binset$seqnames, 1)
@@ -387,9 +390,14 @@ background = function(binsets, n = nrow(binsets), pseudocount = 1, verbose = TRU
       ##print(as.character(newchrom))
       if (newchrom == lastchrom)
       {
+        ## newbin = data.table(bid = i,
+        ##                     seqnames = newchrom,
+        ##                     end = laststart - rdens(1, distance.kernel[, val], resolution, width = distance.bw[, bw]))
+        ## newbin[, start := end - rdens(1, width.kernel[, val], width = width.bw[, bw])]
+        ##
         newbin = data.table(bid = i,
-                            seqnames = newchrom,
-                            end = laststart - round_any(rdens(1, distance.kernel[, val], resolution, width = distance.bw[, bw]), resolution))
+                           seqnames = newchrom,
+                           end = laststart - round_any(rdens(1, distance.kernel[, val], resolution, width = distance.bw[, bw]), resolution))
         newbin[, start := end - round_any(rdens(1, width.kernel[, val], width = width.bw[, bw]), resolution)]
         ##print(newbin)
       }
@@ -399,6 +407,7 @@ background = function(binsets, n = nrow(binsets), pseudocount = 1, verbose = TRU
                             seqnames = newchrom,
                             end = rdens(1, ends.kernel[.(newchrom), val], width = ends.bw[.(newchrom), bw]))
         newbin[, start := end - round_any(rdens(1, width.kernel[, val], width = width.bw[, bw]), resolution)]
+        ##newbin[, start := end - rdens(1, width.kernel[, val], width = width.bw[, bw])]
         ##print(newbin)
       }
       binset = rbind(binset, newbin, fill = TRUE)
@@ -450,7 +459,7 @@ rdens = function(n, values, width = NULL, kernel="gaussian") {
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
 #' @return data.table of sub-binsets i.e. k-power set of binsets annotated with $count field representing covariates, ready for fitting, **one row per binset
-annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromosomal.dist = 1e8, interchromosomal.table = NULL, gg = NULL, mc.cores = 20, numchunks = 2*mc.cores-1, seed = 42, verbose = TRUE, unique.per.setid = TRUE, resolution = 5e4)
+annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromosomal.dist = 1e8, interchromosomal.table = NULL, gg = NULL, mc.cores = 20, numchunks = 200*mc.cores-1, seed = 42, verbose = TRUE, unique.per.setid = TRUE, resolution = 5e4)
 {
   set.seed(seed)
   if (!inherits(binsets, 'GRanges'))
@@ -521,7 +530,7 @@ annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromos
     bindist = unique(bindist[, .(bid, i, j, distance)][i<j])
     bindist = merge(bindist, bindist.intra, by = c("bid", "i", "j"), all.x = T)
     bindist[, distance := ifelse(distance.x <= 1, distance.y, distance.x)]  
-    ## bindist[, distance := round_any(distance, resolution)]
+    bindist[, distance := round_any(distance, resolution)]
     bindist = bindist[, .(bid, i , j, distance)]  
     ## bindist[, distance := ifelse(distance < resolution, resolution, distance)]
     setkeyv(bindist, c('i', 'j'))
@@ -561,9 +570,11 @@ annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromos
       ubidl = split(ubid, ceiling(runif(length(ubid))*numchunks)) ## randomly chop up ubid into twice the number of mc.coreso
       counts = pbmclapply(ubidl, mc.cores = mc.cores, function(bids)
       {
-        out = merge(sub.binsets[.(as.factor(bids)), ], ov, by = c('binid', 'bid'), allow.cartesian = TRUE)
-        if (nrow(out)){
+          out = tryCatch(merge(sub.binsets[.(as.factor(bids)), ], ov, by = c('binid', 'bid'), allow.cartesian = TRUE),
+                         error = function(e) NULL)
+        if (!is.null(out) & nrow(out) > 0){
             if (unique.per.setid){
+                out = out[, .(binid, bid, setid, iid, tot, cid)]
                 this.step1 = out[, .(hit = all(1:tot[1] %in% iid)), by = .(cid, setid, bid, tot)][hit == TRUE]
                 setkeyv(this.step1, c("bid", "cid", "tot"))
                 this.step1 = this.step1[, tail(.SD, 1), by = .(cid, bid)]
@@ -582,13 +593,28 @@ annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromos
   ## other goodies
   ## changing to mean instead of median
   if (verbose) smessage('Computing min median max distances per setid')
-  dists = sub.binsets[, bindist[as.data.table(expand.grid(i = binid, j = binid))[i<j, ], .(dist = c('min.dist', 'mean.dist', 'max.dist'), value = as.numeric(summary(distance+1, na.rm = T)[c(1, 4, 6)]))], by = .(setid, bid)] %>% dcast(bid + setid ~ dist, value.var = 'value')
+  ## dists = sub.binsets[, bindist[as.data.table(expand.grid(i = binid, j = binid))[i<j, ], .(dist = c('min.dist', 'mean.dist', 'max.dist'), value = as.numeric(summary(distance+1, na.rm = T)[c(1, 4, 6)]))], by = .(setid, bid)] %>% dcast(bid + setid ~ dist, value.var = 'value')
 
+  ubid = unique(sub.binsets$bid) ## split up to lists to leverage pbmclapply
+  ubidl = split(ubid, ceiling(runif(length(ubid))*numchunks)) ## randomly chop up ubid into twice the number of mc.coreso
+  dists = pbmclapply(ubidl, mc.cores = mc.cores, function(bids)
+  {
+      this.sub.binsets = sub.binsets[bid %in% bids]
+      this.dists = this.sub.binsets[, bindist[as.data.table(expand.grid(i = binid, j = binid))[i<j, ], .(dist = c('min.dist',  'max.dist'), value = quantile(distance+1,  c(0, 1)))], by = .(setid, bid)] %>% dcast(bid + setid ~ dist, value.var = 'value')
+      })  %>% rbindlist
+
+  
   if (verbose) smessage('Computing marginal sum per bid')
   margs = counts[, .(sum.counts = sum(count)), by = .(bid)]
 
   if (verbose) smessage('Computing total width and cardinality per setid')
-  widths = sub.binsets[, .(width = sum(width(binsets)[binid])+1, cardinality = .N), by = .(bid, setid)]
+  ubid = unique(sub.binsets$bid) ## split up to lists to leverage pbmclapply
+  ubidl = split(ubid, ceiling(runif(length(ubid))*numchunks)) ## randomly chop up ubid into twice the number of mc.coreso
+  widths = pbmclapply(ubidl, mc.cores = mc.cores, function(bids)
+  {
+      this.sub.binsets = sub.binsets[bid %in% bids]
+      this.widths = this.sub.binsets[, .(width = sum(width(binsets)[binid])+1, cardinality = .N), by = .(bid, setid)]
+  })  %>% rbindlist
 
 
   if (verbose) smessage('Merging counts, distance, and width')
@@ -680,9 +706,9 @@ fit = function(annotated.binsets, nb = TRUE, return.model = TRUE, verbose = TRUE
 {
   if (!nb) stop('not yet supported')
   ## added sumcounts as cov and width as only offset
-  covariates = setdiff(names(annotated.binsets), c('bid', 'setid', 'width', 'count'))
+  covariates = setdiff(names(annotated.binsets), c('bid', 'setid', 'mean.dist', 'count'))
   fmstring = paste('count ~', paste(paste0('log(', covariates, ')', collapse = ' + ')))
-  fmstring = paste0(fmstring, " + ", "offset(log(width))")
+  ## fmstring = paste0(fmstring, " + ", "offset(log(width))")
   fm = formula(fmstring)
 ##
   model = tryCatch(glm.nb(formula = fm, data = annotated.binsets, control = glm.control(maxit = 50)), error = function(e) NULL)
@@ -706,7 +732,7 @@ fit = function(annotated.binsets, nb = TRUE, return.model = TRUE, verbose = TRUE
 sscore = function(annotated.binsets, model, verbose = TRUE)
 {
   if (is.null(annotated.binsets$count))
-    stop('annotated.binsets need to have $count column, did you forget to annotate?')
+    stop('annotsynated.binsets need to have $count column, did you forget to annotate?')
 
   if (length(missing <- setdiff(model$covariates, names(annotated.binsets))))
     stop('annotated.binsets missing covariates: ', paste(missing, collapse = ', '))
@@ -740,7 +766,7 @@ sscore = function(annotated.binsets, model, verbose = TRUE)
 #' @param verbose logical flag whether to fit
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
-synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL, covariates = NULL, annotated.binsets = NULL, k = 5, gg = NULL, mc.cores = 20, verbose = TRUE, resolution = 5e4)
+synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL, covariates = NULL, annotated.binsets = NULL, k = 5, gg = NULL, theta = NULL, mc.cores = 20, verbose = TRUE, resolution = 5e4)
 {
   if (!inherits(binsets, 'GRanges'))
     {
@@ -749,6 +775,10 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
         stop('binsets failed conversion to GRanges, please provide valid GRnges')
     }
 
+  if (is.null(theta)){
+      stop('Please provide theta from step 1')
+  }
+  
   if (is.null(background.binsets) & is.null(model))
   {
     if (verbose) smessage('Computing random background binsets using features of provided binsets')
@@ -776,7 +806,7 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
   setkey(scored.binsets, bid)
   ubid = unique(scored.binsets$bid)
 
-  res = pbmclapply(ubid, function(this.bid) muffle(dflm(glm.nb(data = scored.binsets[.(this.bid),], count ~ multiway + offset(log(count.predicted)), control = glm.control(maxit = 50)))[2, ][, name := this.bid])) %>% rbindlist
+  res = pbmclapply(ubid, function(this.bid) muffle(dflm(glm.nb.fh(data = scored.binsets[.(this.bid),], count ~ multiway + offset(log(count.predicted)), theta = theta, control = glm.control(maxit = 50)))[2, ][, name := this.bid])) %>% rbindlist
   setnames(res, 'name', 'bid')
 
   return(res)
@@ -2012,4 +2042,168 @@ dedup = function(x, suffix = '.')
   out = x;
   out[unlist(udup.ix)] = paste(out[unlist(udup.ix)], unlist(udup.suffices), sep = '');
   return(out)
+}
+
+
+################################
+#' @name glm.nb.fh
+#' @title glm.nb.fh
+#'
+#' @description
+#' modified glm.nb that takes a pre-defined theta
+#' 
+#' 
+#' @author Marcin Imielinski
+################################
+glm.nb.fh = function (formula, data, weights, subset, na.action, start = NULL,
+                      etastart, mustart, control = glm.control(...), method = "glm.fit",
+                      model = TRUE, x = FALSE, y = TRUE, contrasts = NULL, ...,  theta = NULL,
+                      init.theta, link = log)
+{
+    loglik <- function(n, th, mu, y, w) sum(w * (lgamma(th +
+                                                        y) - lgamma(th) - lgamma(y + 1) + th * log(th) + y *
+                                                 log(mu + (y == 0)) - (th + y) * log(th + mu)))
+    link <- substitute(link)
+    fam0 <- if (missing(init.theta))
+                do.call("poisson", list(link = link))
+            else do.call("negative.binomial", list(theta = init.theta,
+                                                   link = link))
+    mf <- Call <- match.call()
+    m <- match(c("formula", "data", "subset", "weights", "na.action",
+                 "etastart", "mustart", "offset"), names(mf), 0)
+    mf <- mf[c(1, m)]
+    mf$drop.unused.levels <- TRUE
+    mf[[1L]] <- quote(stats::model.frame)
+    mf <- eval.parent(mf)
+    Terms <- attr(mf, "terms")
+    if (method == "model.frame")
+        return(mf)
+    Y <- model.response(mf, "numeric")
+    X <- if (!is.empty.model(Terms))
+             model.matrix(Terms, mf, contrasts)
+         else matrix(, NROW(Y), 0)
+    w <- model.weights(mf)
+    if (!length(w))
+        w <- rep(1, nrow(mf))
+    else if (any(w < 0))
+        stop("negative weights not allowed")
+    offset <- model.offset(mf)
+    mustart <- model.extract(mf, "mustart")
+    etastart <- model.extract(mf, "etastart")
+    n <- length(Y)
+    if (!missing(method)) {
+        if (!exists(method, mode = "function"))
+            stop(gettextf("unimplemented method: %s", sQuote(method)),
+                 domain = NA)
+        glm.fitter <- get(method)
+    }
+    else {
+        method <- "glm.fit"
+        glm.fitter <- stats::glm.fit
+    }
+    if (control$trace > 1)
+        message("Initial fit:")
+
+    fit <- glm.fitter(x = X, y = Y, w = w, start = start, etastart = etastart,
+                      mustart = mustart, offset = offset, family = fam0, control = list(maxit = control$maxit,
+                                                                                        epsilon = control$epsilon, trace = control$trace >
+                                                                                                                       1), intercept = attr(Terms, "intercept") > 0)
+    class(fit) <- c("glm", "lm")
+    mu <- fit$fitted.values
+    if (is.null(theta))
+    {
+        th <- as.vector(theta.ml(Y, mu, sum(w), w, limit = control$maxit,
+                                 trace = control$trace > 2))
+    }
+    else
+    {
+        th = theta
+
+        if (control$trace > 1)
+            message(gettextf("Fixing theta value to 'theta': %f", signif(th)),
+                    domain = NA)
+    }
+
+    if (control$trace > 1)
+        message(gettextf("Initial value for 'theta': %f", signif(th)),
+                domain = NA)
+    fam <- do.call("negative.binomial", list(theta = th[1], link = link))
+    iter <- 0
+    d1 <- sqrt(2 * max(1, fit$df.residual))
+    d2 <- del <- 1
+    g <- fam$linkfun
+    Lm <- loglik(n, th, mu, Y, w)
+    Lm0 <- Lm + 2 * d1
+    while (
+    ((iter <- iter + 1) <= control$maxit) &
+    ((abs(Lm0 - Lm)/d1 + abs(del)/d2) > control$epsilon)
+    ){
+        eta <- g(mu)
+        fit <- glm.fitter(x = X, y = Y, w = w, etastart = eta,
+                          offset = offset, family = fam, control = list(maxit = control$maxit,
+                                                                        epsilon = control$epsilon, trace = control$trace >
+                                                                                                       1), intercept = attr(Terms, "intercept") >
+                                                                                                               0)
+        t0 <- th
+        if (is.null(theta))
+        {
+            th <- theta.ml(Y, mu, sum(w), w, limit = control$maxit,
+                           trace = control$trace > 2)
+        } else
+        {
+            th = theta
+        }
+
+        fam <- do.call("negative.binomial", list(theta = th[1],  ## we don't need all the thetas here if theta is vectorized
+                                                 link = link))
+
+        mu <- fit$fitted.values
+        del <- t0 - th ## this is where the vectorized theta makes a difference
+        Lm0 <- Lm
+        Lm <- loglik(n, th, mu, Y, w) ## and here - log likelihood computation
+        if (control$trace) {
+            Ls <- loglik(n, th, Y, Y, w)
+            Dev <- 2 * (Ls - Lm)
+            message(sprintf("Theta(%d) = %f, 2(Ls - Lm) = %f",
+                            iter, signif(th), signif(Dev)), domain = NA)
+        }
+    }
+    if (!is.null(attr(th, "warn")))
+        fit$th.warn <- attr(th, "warn")
+    if (iter > control$maxit) {
+        warning("alternation limit reached")
+        fit$th.warn <- gettext("alternation limit reached")
+    }
+    if (length(offset) && attr(Terms, "intercept")) {
+        null.deviance <- if (length(Terms))
+                             glm.fitter(X[, "(Intercept)", drop = FALSE], Y, w,
+                                        offset = offset, family = fam, control = list(maxit = control$maxit,
+                                                                                      epsilon = control$epsilon, trace = control$trace >
+                                                                                                                     1), intercept = TRUE)$deviance
+        else fit$deviance
+        fit$null.deviance <- null.deviance
+    }
+    class(fit) <- c("negbin", "glm", "lm")
+    fit$terms <- Terms
+    fit$formula <- as.vector(attr(Terms, "formula"))
+    Call$init.theta <- signif(as.vector(th), 10)
+    Call$link <- link
+    fit$call <- Call
+    if (model)
+        fit$model <- mf
+    fit$na.action <- attr(mf, "na.action")
+    if (x)
+        fit$x <- X
+    if (!y)
+        fit$y <- NULL
+    fit$theta <- as.vector(th)
+    fit$SE.theta <- attr(th, "SE")
+    fit$twologlik <- as.vector(2 * Lm)
+    fit$aic <- -fit$twologlik + 2 * fit$rank + 2
+    fit$contrasts <- attr(X, "contrasts")
+    fit$xlevels <- .getXlevels(Terms, mf)
+    fit$method <- method
+    fit$control <- control
+    fit$offset <- offset
+    fit
 }
