@@ -272,7 +272,7 @@ background = function(binsets, n = nrow(binsets), pseudocount = 1, verbose = TRU
   {
     distance.kernel = gr2dt(binsets)[, as.data.table(expand.grid(i = binid, j = binid))[i<j, ], by = bid] %>% setkeyv(c('i', 'j'))
     distance.kernel[, val := GenomicRanges::distance(binsets[i], binsets[j])]
-    distance.kernel = distance.kernel[j-i==1]
+    ## distance.kernel = distance.kernel[j-i==1]
   } else {
     if (verbose) smessage('Using graph distance')
 ######
