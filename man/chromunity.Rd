@@ -2,48 +2,63 @@
 % Please edit documentation in R/chromunity.R
 \name{chromunity}
 \alias{chromunity}
-\title{Discovery of communities in Pore-C concatemers}
+\title{Detect communitites and make bin-sets}
 \usage{
 chromunity(
-  this.pc.gr,
-  k.knn = 10,
-  k.min = 1,
-  tiles,
-  which.gr = which.gr,
-  filter_local_number = FALSE,
-  filter_local_thresh = NULL,
-  take_sub_sample = FALSE,
-  frac = 0.25,
-  seed.n = 154
+  concatemers,
+  resolution = 50000,
+  region = si2gr(concatemers),
+  windows = NULL,
+  piecewise = TRUE,
+  shave = FALSE,
+  bthresh = 3,
+  cthresh = 3,
+  max.size = 2^31 - 1,
+  subsample.frac = NULL,
+  window.size = 2e+06,
+  max.slice = 1e+06,
+  min.support = 5,
+  stride = window.size/2,
+  mc.cores = 5,
+  k.knn = 25,
+  k.min = 5,
+  pad = 1000,
+  peak.thresh = 0.85,
+  seed = 42,
+  verbose = TRUE
 )
 }
 \arguments{
-\item{this.pc.gr}{is the GRanges with each row as Pore-C monomer and must have a cmetadata column with corresponding concatemer annotation. The column should be called "read_idx"}
+\item{concatemers}{GRanges with $cid}
 
-\item{k.knn}{numeric threshoold on k nearest concatemer neighbors to be used to create the graph.}
+\item{resolution}{bin size for community detection [5e4]}
 
-\item{k.min}{numeric the threshold to number of concatemers pairs to be considered "similar"}
+\item{region}{region to run on [si2gr(concatemers)]}
 
-\item{tiles}{GRanges object dividing the genome in a fixed size bin to be defined by user}
+\item{windows}{GRanges or GRangesList of windows to test, more appropriate for testing specific windows, e.g. targets such as promoters/enhancers windows. If sliding window approach is desired, keep this parameter as NULL and use piecewise argument.}
 
-\item{which.gr}{the GRanges for the window of interest}
+\item{piecewise}{logical flag specifying whether to run one window at a time ie to cluster concatemers that (partially overlap) that window, note: this may}
 
-\item{filter_local_number}{boolean (default == FALSE) filters out concatemers in the window that fall below filter_local_thresh length}
+\item{shave}{logical flag specifying whether to iteratively "shave" concatemers and bins to a subset C and B where every bin in B has at leat bthresh concatemer support across C and every concatemer in C has order / cardinality of at least cthresh across B, this is done by iteratively removing bins and concatemers until you reach a fixed point}
 
-\item{filter_local_thresh}{(default == NULL) numeric minimum length of concatemer to be considered for downstream analyses. To be set if filter_local_number == TRUE.}
+\item{max.size}{max size of problem (concatemers x bins) to consider (default is 2^31-1).  If we hit this problem size, will subsample concatemers so that concatemers * bins is < max.dim, this step is done downstream of shaving}
 
-\item{take_sub_sample}{take a sub sample of concatemers. A random sample of fraction frac is taken}
+\item{window.size}{window size to do community detection within}
 
-\item{frac}{fraction of concatemer to be subsampled. To be set if take_sub_sample == TRUE.}
+\item{k.min}{minimal number of nearest neighbors an edge in KNN graph needs to have before community detection}
 
-\item{seed.n}{numeric set a seed when doing random subsampling}
+\item{pad}{integer pad to use when computing the footprint of each chromunity and finding peak regions which become binsets}
+
+\item{peak.thresh}{peak threshold with which to call a peak}
+
+\item{tiles.k.knn}{KNN parameter specifying how many nearest neighbors to sample when building KNN graph}
 }
 \value{
-
+list with items $binset,  $support, $params: $binsets is GRanges of bins with field $bid corresponding to binset id and $support which is the concatemer community supporting the binset which are GRanges with $bid
 }
 \description{
-This function takes in a GRanges with each row as Pore-C monomer with a metadata of the corresponding concatemer id
+Runs genome-wide chromunity detection across a sliding or provided genomic window
 }
 \author{
-Aditya Deshpande
+Aditya Deshpande, Marcin Imielinski
 }

@@ -3,29 +3,48 @@ context("Unit testing chromunity operations")
 
 library(chromunity)
 library(GenomicRanges)
+library(testthat)
+library(pbmcapply)
+library(arrow)
+library(igraph)
+#library(skitools)
+library(plyr)
+library(MASS)
 
 example_gr.path = system.file("extdata", "example_gr.rds", package = 'chromunity')
 window_gr.path = system.file("extdata", "window_gr.rds", package = 'chromunity')
 tiles_gr.path = system.file("extdata", "tiles_gr.rds", package = 'chromunity')
-chromunity_out_gr.path = system.file("extdata", "chromunity_out_gr.rds", package = 'chromunity')
+chromunity_out.path = system.file("extdata", "chromunity_out.rds", package = 'chromunity')
+annotate_out.path = system.file("extdata", "annotate_out.rds", package = 'chromunity')
+example_dir.path = system.file("extdata", "example_gr.rds", package = 'chromunity')
 
 ## Tests
 
+test_that("parquet2gr", {
+    example_dir1 = system.file("extdata/", package = 'chromunity')
+    this.gr = parquet2gr(example_dir1, mc.cores = 2)
+    expect_identical(class(this.gr)[1], "GRanges")
+    example_dir2 = system.file("extdata/example_gr.rds", package = 'chromunity')
+    expect_error(parquet2gr(example_dir2))
+})
 
 test_that("chromunity", {
     example_gr = readRDS(example_gr.path)
-    window_gr = readRDS(window_gr.path)
-    tiles_gr = readRDS(tiles_gr.path)
-    chromunity_out = chromunity(example_gr, which.gr = window_gr, tiles = tiles_gr, k.knn = 25, k.min = 3)
-    expect_identical(class(chromunity_out)[1], "GRanges")
-    expect_true(identical(colnames(values(chromunity_out)), c("read_idx", "tix", "count", "community", "num.memb")))
+    this.chrom = chromunity(concatemers = example_gr, resolution = 1e5, window.size = 5e6, mc.cores = 2)
+    expect_identical(class(this.chrom)[1], "Chrom")
 })
 
-
-test_that("annotate_multimodal_communities", {
-    chromunity_out_gr = readRDS(chromunity_out_gr.path)
-    window_gr = readRDS(window_gr.path)
-    annotate_c = annotate_multimodal_communities(chromunity_out_gr, which.gr = window_gr)
-    expect_true(identical(colnames(values(annotate_c)), c("community", "read_idx", "tix", "count", "num.memb", "multimodal")))
+test_that("annotate", {
+    example_chrom = readRDS(chromunity_out.path)
+    this.annotate = annotate(binsets = example_chrom$binsets, concatemers = example_chrom$concatemers, mc.cores = 2)
+    expect_identical(class(this.annotate)[1], "data.table")
 })
+
+test_that("synergy", {
+    example_annot = readRDS(annotate_out.path)
+    example_chrom = readRDS(chromunity_out.path)
+    this.synergy = synergy(binsets = example_chrom$binsets, concatemers = example_chrom$concatemers, annotated.binsets = example_annot, resolution = 1e5, maxit = 10, mc.cores = 2)
+    expect_identical(class(this.synergy)[1], "data.table")
+})
+
 

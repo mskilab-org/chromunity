@@ -9,22 +9,27 @@
 #' @importFrom Matrix sparseMatrix 
 #' @import zoo
 #' @import arrow
+#' @import skitools
+#' @importFrom pbmcapply pbmclapply 
 #' @importFrom stats median
 #' @importFrom stats na.omit
 #' @importFrom MASS ginv
 #' @importFrom utils globalVariables
+#' @importFrom plyr round_any
 #' @importFrom magrittr %>%
 #' @import GenomicRanges
 #' @import gUtils
 #' @importFrom igraph graph.adjacency
 #' @importFrom igraph cluster_louvain
+#' @importFrom igraph cluster_fast_greedy
 #' @importFrom BiocGenerics t
+
 
 globalVariables(c("::", ":::", "num.memb", "community", "max.local.dist", "read_idx", "as.data.table", "count", "dcast.data.table", "combn", "tot", "copy", "nfrac", "nmat", ".", "bx2", "bx1", "as", "seqlevels", "loess", ".N", ".SD", ":="))
 
 #' @name parquet2gr
-#' @description
-#' Converts parquet format from Pore-C snakemake pipeline to a single gRanges object
+#' @title Parquet files to GRanges
+#' @description Converts parquet format from Pore-C snakemake pipeline to a single gRanges object
 #'
 #' @param path string Path to a directory containing all pore_c.parquet files to be read in.
 #' @param col_names vector Column names from parquet files to read in.
@@ -42,17 +47,17 @@ parquet2gr = function(path = NULL, col_names = NULL, save_path = NULL, prefix = 
         stop("Need a valid path to all Pore-C parquets.")
     }
 
-    all.paths = data.table(file_path = dir(path, "pore_c.parquet$", all.files = TRUE, recursive = TRUE, full = TRUE))
+    all.paths = data.table(file_path = dir(path, all.files = TRUE, recursive = TRUE, full = TRUE))[grepl("*pore_c.parquet*", file_path)]
 
     if(nrow(all.paths) == 0){
-        stop("No valid files files with suffix "pore_c.parquet$" found.")
+        stop("No valid files files with suffix pore_c.parquet found.")
     } 
 
     if(verbose){"Beginning to read parquet files"}
 
     if(is.null(col_names)){col_names = c("read_name", "chrom", "start", "end", "pass_filter")}
     
-    parq.list = pbmclapply(1:nrow(), function(k){
+    parq.list = pbmclapply(1:nrow(all.paths), function(k){
         parq.al = read_parquet(all.paths[k]$file_path, col_select = col_names)
         parq.al = as.data.table(parq.al)
         return(parq.al)
@@ -87,8 +92,8 @@ parquet2gr = function(path = NULL, col_names = NULL, save_path = NULL, prefix = 
 
 
 #' @name background
-#' @description
-#' Given n binsets generates random "background" binsets that mirrors the input binset characteristics with respect to chromosome, width, and distance.
+#' @title Generate random bins 
+#' @description Given n binsets generates random "background" binsets that mirrors the input binset characteristics with respect to chromosome, width, and distance.
 #'
 #' Generates (chromosome specific) kernels for width, cardinality, distance and models interchromosomal binsets by allowing
 #' a chromosome transition matrix which then lands you on a coordinate that is also chosen from a kernel. 
@@ -106,7 +111,7 @@ parquet2gr = function(path = NULL, col_names = NULL, save_path = NULL, prefix = 
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
 
-background = function(binsets, n = nrow(binsets), pseudocount = 1, resolution = 5e4, gg=NULL, interchromosomal.dist = 1e8, interchromosomal.table = NULL, verbose = TRUE, mc.cores = 10)
+background = function(binsets, n = nrow(binsets), pseudocount = 1, resolution = 5e4, gg=NULL, interchromosomal.dist = 1e8, interchromosomal.table = NULL, verbose = TRUE, mc.cores = 5)
 {
   if (!length(binsets))
     stop('empty binsets')
@@ -125,7 +130,6 @@ background = function(binsets, n = nrow(binsets), pseudocount = 1, resolution = 
   {
     distance.kernel = gr2dt(binsets)[, as.data.table(expand.grid(i = binid, j = binid))[i<j, ], by = bid] %>% setkeyv(c('i', 'j'))
     distance.kernel[, val := GenomicRanges::distance(binsets[i], binsets[j])]
-    ## distance.kernel = distance.kernel[j-i==1]
   } else {
     if (verbose) smessage('Using graph distance')
 ######
@@ -278,7 +282,8 @@ background = function(binsets, n = nrow(binsets), pseudocount = 1, resolution = 
 
 
 #' @name rdens
-#' @description
+#' @title Empirical dists
+#' @description getting empirical distributions for a covariate
 #'
 #' Function to sample kernel density from a distribution adapted from
 #' https://stats.stackexchange.com/questions/321542/how-can-i-draw-a-value-randomly-from-a-kernel-density-estimate
@@ -300,6 +305,7 @@ rdens = function(n, values, width = NULL, kernel="gaussian") {
 
 
 #' @name annotate
+#' @title Annoatate bins with counts and covariates
 #' @description
 #'
 #' Given n binsets annotates their k-power set (i.e. all sets in the power set with cardinality <= k) with
@@ -317,7 +323,7 @@ rdens = function(n, values, width = NULL, kernel="gaussian") {
 #' @export
 #' @return data.table of sub-binsets i.e. k-power set of binsets annotated with $count field representing covariates, ready for fitting, **one row per binset
 
-annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromosomal.dist = 1e8, interchromosomal.table = NULL, gg = NULL, mc.cores = 20, numchunks = 200*mc.cores-1, seed = 42, verbose = TRUE, unique.per.setid = TRUE, resolution = 5e4)
+annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromosomal.dist = 1e8, interchromosomal.table = NULL, gg = NULL, mc.cores = 5, numchunks = 200*mc.cores-1, seed = 42, verbose = TRUE, unique.per.setid = TRUE, resolution = 5e4)
 {
   set.seed(seed)
   if (!inherits(binsets, 'GRanges'))
@@ -325,6 +331,10 @@ annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromos
 
   binsets = gr.stripstrand(binsets)
   binsets$bid = as.factor(binsets$bid)
+  ## remove single bins
+  binsets = gr2dt(binsets)
+  binsets[, cardinality := .N, by = bid]
+  binsets = dt2gr(binsets[cardinality > 1])
   ## each row of binsets is a bin
   binsets$binid = 1:length(binsets)
   #####
@@ -534,7 +544,8 @@ annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromos
 
 
 #' @name powerset
-#' @description
+#' @title Make powerset
+#' @description Make powerset
 #'
 #' 
 #' @param set vector
@@ -548,9 +559,8 @@ powerset = function(set, min.k = 1, max.k = 5)
 
 
 #' @name fit
-#' @description
-#'
-#' Fit model to annotated binsets (outputs of annotate)
+#' @title Fit the model
+#' @description Fit model to annotated binsets (outputs of annotate)
 #'
 #' @param annotated.binsets data.table of annotated binsets with at least the fields $bid (binset id) $setid (subset id) $count $min.dist $med.dist $max.dist $width $cardinality $width +/- additional covariates as well, note: every column in this data.table must be a covariate 
 #' @param nb logical flag specifying whether to run negative binomial vs. Poisson model
@@ -575,9 +585,8 @@ fit = function(annotated.binsets, nb = TRUE, return.model = TRUE, verbose = TRUE
 
 
 #' @name sscore
-#' @description
-#'
-#' Takes as input annotated binsets and a model and returns each binset scored according to the model
+#' @title Get expectation based on model  
+#' @description Takes as input annotated binsets and a model and returns each binset scored according to the model
 #' Meaning it annotates the columns with $p, $p.left, p.right, $count.predicted
 #'
 #' @param annotated.binsets data.table of annotated binsets with field $count $min.width $med.width $max.width $cardinality $width +/- additional covariates as well
@@ -589,7 +598,7 @@ fit = function(annotated.binsets, nb = TRUE, return.model = TRUE, verbose = TRUE
 sscore = function(annotated.binsets, model, verbose = TRUE)
 {
   if (is.null(annotated.binsets$count))
-    stop('annotsynated.binsets need to have $count column, did you forget to annotate?')
+    stop('annotnated.binsets need to have $count column, did you forget to annotate?')
 
   if (length(missing <- setdiff(model$covariates, names(annotated.binsets))))
     stop('annotated.binsets missing covariates: ', paste(missing, collapse = ', '))
@@ -607,10 +616,8 @@ sscore = function(annotated.binsets, model, verbose = TRUE)
 }
 
 #' @name synergy
-#' @description
-#'
-#' Applies synergy model by either taking as input (or training) a background model using a set of providved (or generated) background.binsets
-#' and testing a set of binmers against a set of concatemers.  The model can be generated using a set of covariates. 
+#' @title Apply synergy
+#' @description Applies synergy model by either taking as input (or training) a background model using a set of providved (or generated) background.binsets and testing a set of binmers against a set of concatemers.  The model can be generated using a set of covariates. 
 #' @export
 #' @param concatemers data.table of monomers with fields seqnames, start, end, and $cid specifying concatemer id, which will be counted across each binset
 #' @param binsets data.table of bins with fields seqnames, start, end, and $bid specifying binset id
@@ -623,7 +630,8 @@ sscore = function(annotated.binsets, model, verbose = TRUE)
 #' @param verbose logical flag whether to fit
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
-synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL, covariates = NULL, annotated.binsets = NULL, k = 5, gg = NULL, theta = NULL, mc.cores = 20, verbose = TRUE, resolution = 5e4)
+
+synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL, covariates = NULL, annotated.binsets = NULL, k = 5, gg = NULL, theta = NULL, mc.cores = 5, verbose = TRUE, resolution = 5e4, maxit = 50)
 {
   if (!inherits(binsets, 'GRanges'))
     {
@@ -632,14 +640,10 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
         stop('binsets failed conversion to GRanges, please provide valid GRnges')
     }
 
-  if (is.null(theta)){
-      stop('Please provide theta from step 1')
-  }
-  
   if (is.null(background.binsets) & is.null(model))
   {
     if (verbose) smessage('Computing random background binsets using features of provided binsets')
-    background.binsets = background(binsets, n = 1500, mc.cores = mc.cores, resolution = resolution)
+    background.binsets = background(binsets, n = 1000, mc.cores = mc.cores, resolution = resolution)
     background.binsets = background.binsets[!bid %in% background.binsets[width < resolution]$bid]
   }
   
@@ -647,23 +651,24 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
   {
     if (verbose) smessage('Annotating k-power sets of background binsets using features and covariates')
     annotated.background.binsets = annotate(binsets = background.binsets, concatemers = concatemers, gg = gg, covariates = covariates, k = k, mc.cores = mc.cores, verbose = verbose)
-
+    
     if (verbose) smessage('Fitting model to k-power sets of annotated background binsets')
-    model = fit(annotated.background.binsets, nb = TRUE, return.model = TRUE, verbose = verbose)
+    model = fit(annotated.background.binsets, nb = TRUE, return.model = TRUE, verbose = verbose, maxit = maxit)
+    theta = model$model$theta
   }
 
   if (is.null(annotated.binsets))
     annotated.binsets = annotate(binsets = binsets, concatemers = concatemers, covariates = covariates, k = k, gg = gg, mc.cores = mc.cores, verbose = verbose)
 
-  ## browser()
   if (verbose) smessage('Scoring binsets')
+  theta = model$model$theta
   scored.binsets = sscore(annotated.binsets, model, verbose = verbose)
 
   scored.binsets[, multiway := cardinality > 2]
   setkey(scored.binsets, bid)
   ubid = unique(scored.binsets$bid)
 
-  res = pbmclapply(ubid, function(this.bid) muffle(dflm(glm.nb.fh(data = scored.binsets[.(this.bid),], count ~ multiway + offset(log(count.predicted)), theta = theta, control = glm.control(maxit = 50)))[2, ][, name := this.bid])) %>% rbindlist
+  res = pbmclapply(ubid, function(this.bid) muffle(dflm(glm.nb.fh(data = scored.binsets[.(this.bid),], count ~ multiway + offset(log(count.predicted)), theta = theta, control = glm.control(maxit = maxit)))[2, ][, name := this.bid])) %>% rbindlist
   setnames(res, 'name', 'bid')
 
   return(res)
@@ -671,14 +676,13 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
 
 
 #' @name chromunity
-#' @description
-#'
-#' Runs genome-wide chromunity detection across a sliding or provided genomic window
+#' @title Detect communitites and make bin-sets
+#' @description Runs genome-wide chromunity detection across a sliding or provided genomic window
 #'
 #' @param concatemers GRanges with $cid
 #' @param resolution bin size for community detection [5e4]
 #' @param region region to run on [si2gr(concatemers)]
-#' @param windows GRanges or GRangesList of windows to test, more appropriate for testing a single or few windows. If sliding window approach is desired, keep this parameter as NULL and use piecewise argument.
+#' @param windows GRanges or GRangesList of windows to test, more appropriate for testing specific windows, e.g. targets such as promoters/enhancers windows. If sliding window approach is desired, keep this parameter as NULL and use piecewise argument.
 #' @param piecewise logical flag specifying whether to run one window at a time ie to cluster concatemers that (partially overlap) that window, note: this may
 #' @param shave  logical flag specifying whether to iteratively "shave" concatemers and bins to a subset C and B where every bin in B has at leat bthresh concatemer support across C and every concatemer in C has order / cardinality of at least cthresh across B, this is done by iteratively removing bins and concatemers until you reach a fixed point
 #' @param window.size window size to do community detection within
@@ -691,7 +695,7 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
 
-chromunity = function(concatemers, resolution = 5e4, region = si2gr(concatemers), windows = NULL, piecewise = TRUE, shave = FALSE, bthresh = 3, cthresh = 3, max.size = 2^31-1, subsample.frac = NULL, window.size = 2e6, max.slice = 1e6, min.support = 5, stride = window.size/2, mc.cores = 20, k.knn = 25, k.min = 5, pad = 1e3, peak.thresh = 0.85, seed = 42, verbose = TRUE)
+chromunity = function(concatemers, resolution = 5e4, region = si2gr(concatemers), windows = NULL, piecewise = TRUE, shave = FALSE, bthresh = 3, cthresh = 3, max.size = 2^31-1, subsample.frac = NULL, window.size = 2e6, max.slice = 1e6, min.support = 5, stride = window.size/2, mc.cores = 5, k.knn = 25, k.min = 5, pad = 1e3, peak.thresh = 0.85, seed = 42, verbose = TRUE)
 {
   if (is.null(windows))
       windows = gr.start(gr.tile(region, stride))+window.size/2
@@ -711,11 +715,12 @@ chromunity = function(concatemers, resolution = 5e4, region = si2gr(concatemers)
   
   params = data.table(k.knn = k.knn, k.min = k.min, seed = seed)
 
-  if (!is.null(resolution))
-    bins = gr.tile(reduce(gr.stripstrand(unlist(windows))), resolution)[, c()]
-  else
-    bins = windows %>% unlist %>% gr.stripstrand %>% disjoin
-
+  if (!is.null(resolution)){
+      bins = gr.tile(reduce(gr.stripstrand(unlist(windows))), resolution)[, c()]
+  } else {
+      bins = windows %>% unlist %>% gr.stripstrand %>% disjoin
+  }
+    
   if (verbose) cmessage('Generated ', length(bins), ' bins across ', length(windows), ' windows')
 
   if (verbose) cmessage('Matching concatemers with bins, and bins with windows using gr.match with max.slice ', max.slice, ' and ', mc.cores, ' cores')
@@ -740,20 +745,20 @@ chromunity = function(concatemers, resolution = 5e4, region = si2gr(concatemers)
         ##cc = pbmclapply(winids, mc.cores = mc.cores, mc.preschedule = TRUE, function(win)
         cc = mclapply(winids, mc.cores = mc.cores, mc.preschedule = TRUE, function(win)
         {
-            print(win)
+            ## print(win)
             suppressWarnings({
-          these.bins = binmap[.(win), ]
-          cc = concatemer_communities(concatemers %Q% (binid %in% these.bins$binid), k.knn = k.knn, max.size = max.size, k.min = k.min, seed = seed, verbose = verbose>1)
-          if (length(cc))
-          {
-            cc = cc[cc$support >= min.support] 
-            cc$winid = win
-          }
+                these.bins = binmap[.(win), ]
+                cc = concatemer_communities(concatemers %Q% (binid %in% these.bins$binid), k.knn = k.knn, max.size = max.size, k.min = k.min, seed = seed, verbose = verbose>1)
+                if (length(cc))
+                {
+                    cc = cc[cc$support >= min.support] 
+                    cc$winid = win
+                }
+            })
+            cc
         })
-        cc
-      })
-      
-      cc = cc %>% do.call(grbind, .)
+        
+        cc = cc %>% do.call(grbind, .)
     }
   else ## we shave 
   {
@@ -777,9 +782,9 @@ chromunity = function(concatemers, resolution = 5e4, region = si2gr(concatemers)
   }
       
   if (!length(cc))
-    return(Chromunity(concatemers = GRanges(), binsets = GRanges(), meta = params))
+    return(Chrom(concatemers = GRanges(), binsets = GRanges(), meta = params))
 
-  uchid = unique(cc$chid)
+  uchid = unique((cc %Q% (support >= min.support))$chid)
 
   if (verbose) cmessage('Analyzing gr.sums associated with ', length(uchid), ' concatemer communities to generate binsets')
 
@@ -792,21 +797,22 @@ chromunity = function(concatemers, resolution = 5e4, region = si2gr(concatemers)
       binset = bins[, c()] %&% (peaks[peaks$score > quantile(peaks$score, peak.thresh)])
       if (length(binset))
       {
-        binset$chid = this.chid
+        binset$bid = this.chid
+        binset$chid = this.chid  
         binset$winid = this.cc$winid[1]
+        binset = gr.reduce(binset)
       }
     })
     binset
   })  %>% do.call(grbind, .)
 
-  return(Chromunity(concatemers = cc[cc$chid %in% binsets$chid], binsets = binsets, meta = params))
+  return(Chrom(concatemers = cc[cc$chid %in% binsets$chid], binsets = binsets, meta = params))
 }
 
 
 #' @name shave_concatemers
-#' @description
-#'
-#' "Shaves" concatemers and bins to a set C and B, respectively such that every bin in B
+#' @title Optimization for reducing concatemer space
+#' @description "Shaves" concatemers and bins to a set C and B, respectively such that every bin in B
 #' has at least bthresh concatemer support and every concatemer in C has at least cthresh
 #' bin-wise order.  This is done by iteratively removing concatemers and bins until a fixed point is reached.
 #'
@@ -840,143 +846,10 @@ shave_concatemers = function(concatemers, cthresh = 3, bthresh = 2, verbose = TR
 
 
 
-## #' @name concatemer_communities
-## #' @description
-## #'
-## #' Low level function that labels concatemers with chromunity ids $chid using community detection on a graph. 
-## #'
-## #' Given a GRanges of monomers labeled by concatemer id $cid
-## #'
-## #' @param concatemers GRanges of monomers with field $cid indicating concatemer id and $binid represent bin id
-## #' @param tiles.k.knn KNN parameter specifying how many nearest neighbors to sample when building KNN graph
-## #' @param k.min minimal number of nearest neighbors an edge in KNN graph needs to have before community detection
-## #' @param drop.small logical flag specifying whether to remove "small" concatemers ie those with a footprint <= small argument [FALSE]
-## #' @param small integer threshold for bases that define small concatemers, only relevant if drop.small = TRUE
-## #' @param subsample.frac optional arg specifying fraction of concatemers to subsample [NULL]
-## #' @param seed seed for subsampling
-## #' @return GRanges of concatemers labeled by $c mmunity which specifies community id
-## concatemer_communities = function (concatemers, k.knn = 25, k.min = 5, 
-##     drop.small = FALSE,small = 1e4, 
-##     subsample.frac = NULL, seed = 42, verbose = TRUE) 
-## {
-##   reads = concatemers
-
-##   if (is.null(reads$cid))
-##   {
-##     if ('read_idx' %in% names(values(reads)))
-##       names(values(reads))[match('read_idx', names(values(reads)))] = 'cid'
-##     else
-##       stop("concatemer GRanges must have metadata column $cid or $read_idx specifying the concatemer id")
-##   }
-  
-##   if (drop.small) {
-##     if (verbose) cmessage(paste0("Filtering out reads < ", small))
-##     reads = gr2dt(reads)
-##     setkeyv(reads, c("seqnames", "start"))
-##     reads[, `:=`(max.local.dist, end[.N] - start[1]), by = cid]
-##     reads = reads[max.local.dist > small]
-##     reads = dt2gr(reads)
-##   }
-
-##   if (verbose) cmessage("Matching reads to tiles")
-##   reads = as.data.table(reads)[, `:=`(count, .N), by = cid]
-##   mat = dcast.data.table(reads[count > 2, ] %>% gr2dt, cid ~  binid, value.var = "strand", fun.aggregate = length, fill = 0)                                                        
-##   mat2 = mat[, c(list(cid = cid), lapply(.SD, function(x) x >= 1)), .SDcols = names(mat)[-1]]                                                          
-##   mat2 = suppressWarnings(mat2[, `:=`("NA", NULL)])
-##   reads.ids = mat2$cid
-##   mat2 = as.data.table(lapply(mat2, as.numeric))
-##   if (!is.null(subsample.frac)) {
-##     if (verbose) cmessage("Subsampling concatemers")
-##     tot.num = nrow(mat2[rowSums(mat2[, -1]) > 1, ])
-##     if (verbose) cmessage(paste0("Total number of rows are: ", tot.num))
-##     if (verbose) cmessage("taking a subsample")
-##     number.to.subsample = pmax(round(tot.num * subsample.frac), 1000)
-##     if (verbose) cmessage(paste0("Number sampled: ", number.to.subsample))
-##     set.seed(seed)
-##     concatm = mat2[rowSums(mat2[, -1]) > 1, ][sample(.N, min(c(.N, number.to.subsample))), ]
-##   }
-##   else {
-##     concatm = mat2[rowSums(mat2[, -1]) > 1, ]
-##   }
-##   ubx = concatm$cid
-
-##   if (verbose) cmessage("Matrices made")
-##   gc()
-
-##   concatm = concatm[, setdiff(which(colSums(concatm) > 1), 1), with = FALSE]
-
-##   if (!ncol(concatm))
-##   {
-##     warning('No concatemers found hitting two bins, returning empty result')
-##     return(reads[, chid := NA][c(), ])
-##   }
-
-##   pairs = t(do.call(cbind, apply(concatm[, setdiff(which(colSums(concatm) > 1), 1), with = FALSE] %>% as.matrix, 2, function(x) combn(which(x != 0), 2))))
-                                                    
-##   concatm = as(as.matrix(as.data.frame(concatm)), "sparseMatrix")    
-##   p1 = concatm[pairs[, 1], -1]
-##   p2 = concatm[pairs[, 2], -1]
-##   matching = Matrix::rowSums(p1 & p2)
-##   total = Matrix::rowSums(p1 | p2)
-##   dt = data.table(bx1 = pairs[, 1], bx2 = pairs[, 2], mat = matching, 
-##                   tot = total)[, `:=`(frac, mat/tot)]
-##   dt2 = copy(dt)
-##   dt2$bx2 = dt$bx1
-##   dt2$bx1 = dt$bx2
-##   dt3 = rbind(dt, dt2)
-##   dt3$nmat = dt3$mat
-##   dt3$nfrac = dt3$frac
-##   setkeyv(dt3, c("nfrac", "nmat"))
-##   dt3 = unique(dt3)
-##   dt3.2 = dt3[order(nfrac, nmat, decreasing = T)]
-##   if (verbose) cmessage("Pairs made")
-##   gc()
-##   k = k.knn
-##   knn.dt = dt3.2[mat > 2 & tot > 2, .(knn = bx2[1:k]), by = bx1][!is.na(knn), ]
-##   setkey(knn.dt)
-##   knn = sparseMatrix(knn.dt$bx1, knn.dt$knn, x = 1)
-##   knn.shared = knn %*% knn
-##   if (verbose) cmessage("KNN done")
-##   KMIN = k.min
-##   A = knn.shared * sign(knn.shared > KMIN)
-##   A[cbind(1:nrow(A), 1:nrow(A))] = 0
-##   A <- as(A, "matrix")
-##   A <- as(A, "sparseMatrix")
-##   A = A + t(A)
-##   G = graph.adjacency(A, weighted = TRUE, mode = "undirected")
-##   cl.l = cluster_fast_greedy(G)
-##   cl = cl.l$membership
-##   if (verbose) cmessage("Communities made")
-##   memb.dt = data.table(cid = ubx[1:nrow(A)], chid = cl)
-##   reads = merge(reads, memb.dt, by = "cid")
-##   reads[, `:=`(support, length(unique(cid))), by = chid]
-##   reads = dt2gr(reads)
-##   return(reads)
-## }
-
-## #' @name smessage
-## #' @description
-## #'
-## #' @author Aditya Deshpande, Marcin Imielinski
-## #' @export
-## #' @private 
-## smessage = function(..., pre = 'Synergy')
-##   message(pre, ' ', paste0(as.character(Sys.time()), ': '), ...)
-
-## #' @name cmessage
-## #' @description
-## #'
-## #' @author Aditya Deshpande, Marcin Imielinski
-## #' @export
-## #' @private 
-## cmessage = function(..., pre = 'Chromunity')
-##   message(pre, ' ', paste0(as.character(Sys.time()), ': '), ...)
-
 
 #' @name concatemer_communities
-#' @description
-#'
-#' Low level function that labels concatemers with chromunity ids $chid using community detection on a graph. 
+#' @title Chromunity sub-function
+#' @description Low level function that labels concatemers with chromunity ids $chid using community detection on a graph. 
 #'
 #' Given a GRanges of monomers labeled by concatemer id $cid
 #'
@@ -1129,7 +1002,8 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
 }
 
 #' @name smessage
-#' @description
+#' @title Synergy message
+#' @description synergy message function
 #'
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
@@ -1138,7 +1012,8 @@ smessage = function(..., pre = 'Synergy')
   message(pre, ' ', paste0(as.character(Sys.time()), ': '), ...)
 
 #' @name cmessage
-#' @description
+#' @title Chromuntiy message
+#' @description chromunity message function
 #'
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
@@ -1152,30 +1027,28 @@ cmessage = function(..., pre = 'Chromunity')
 ## CHROMUNITY.CLASS
 #########################################################################
 
-#' @name Chromunity
-#' @title Chromunity
+#' @name Chrom
+#' @title Chrom
 #'
 #' 
-Chromunity = function(binsets = GRanges(), concatemers = GRanges(), meta = data.table(), verbose = TRUE)
+Chrom = function(binsets = GRanges(), concatemers = GRanges(), meta = data.table(), verbose = TRUE)
 {
-  ChromunityObj$new(binsets = binsets, concatemers = concatemers, meta = meta, verbose = verbose)
+  ChromObj$new(binsets = binsets, concatemers = concatemers, meta = meta, verbose = verbose)
 }
 
 
-#' @name ChromunityObj
-#' @title Chromunity object
-#' @description
-#'
-#' Vectorized object that stores the output of chromunity analysis and can be inputted into annotate / synergy functions.
+#' @name ChromObj
+#' @title Chrom object
+#' @description Vectorized object that stores the output of chromunity analysis and can be inputted into annotate / synergy functions.
 #' The main accessors are $binsets and $concatemers which each return GRanges linked through a chromunity id $chid field
 #'
 #' Chromunities can be subsetted, concatenated.  Concatenation will result in deduping any $chid that are present in two inputs. 
-ChromunityObj = R6::R6Class("Chromunity", 
+ChromObj = R6::R6Class("Chrom", 
   public = list(
     initialize = function(binsets = GRanges(), concatemers = GRanges(), meta = data.table(), verbose = TRUE)
     {
       if (!inherits(binsets, 'GRanges'))
-        stop('binsets must non-NULL and a GRanges')
+        stop('binsets must be non-NULL and a GRanges')
       
       if (!inherits(concatemers, 'GRanges'))
         stop('concatemers must be a GRanges')
@@ -1316,25 +1189,25 @@ ChromunityObj = R6::R6Class("Chromunity",
 )
 
 
-#' @name [.Chromunity
+#' @name [.Chrom
 #' @title Subset chromunity
 #' @description
 #'
-#' Overrides the subset operator x[] for use with Chromunity
+#' Overrides the subset operator x[] for use with Chrom
 #'
-#' @param obj Covariate This is the Covariate to be subset
+#' @param obj Cov This is the Covariate to be subset
 #' @param range vector This is the range of Covariates to return, like subsetting a vector. e.g. c(1,2,3,4,5)[3:4] == c(3,4)
-#' @return A new Covariate object that contains only the Covs within the given range
+#' @return A new Cov object that contains only the Covs within the given range
 #' @author Marcin Imielinski
 #' @export
-'c.Chromunity' = function(...){
+'c.Chrom' = function(...){
 
-  ##Ensure that all params are of type Covariate
+  ##Ensure that all params are of type Cov
     cc = list(...)
-    isc = sapply(cc, function(x)  class(x)[1] == 'Chromunity')
+    isc = sapply(cc, function(x)  class(x)[1] == 'Chrom')
 
     if(any(!isc)){
-        stop('Error: All inputs must be of class Chromunity.')
+        stop('Error: All inputs must be of class Chrom.')
     }
 
 
@@ -1350,22 +1223,22 @@ ChromunityObj = R6::R6Class("Chromunity",
   sl = (lapply(cc, function(x) data.table(nm = names(x$seqlengths), len = x$seqlengths)) %>% rbindlist)[, .(len = max(len)), keyby = nm][, structure(len, names = nm)]
   binsets = rbindlist(binsets) %>% dt2gr(seqlengths = sl)
   concatemers = rbindlist(concatemers) %>% dt2gr(seqlengths = sl)
-  return(ChromunityObj$new(binsets = binsets, concatemers = concatemers, meta = rbindlist(metas, fill = TRUE)))
+  return(ChromObj$new(binsets = binsets, concatemers = concatemers, meta = rbindlist(metas, fill = TRUE)))
 }
 
 
-#' @name [.Chromunity
+#' @name [.Chrom
 #' @title Subset chromunity
 #' @description
 #'
-#' Overrides the subset operator x[] for use with Chromunity
+#' Overrides the subset operator x[] for use with Chrom
 #'
-#' @param obj Covariate This is the Covariate to be subset
+#' @param obj Cov This is the Covariate to be subset
 #' @param range vector This is the range of Covariates to return, like subsetting a vector. e.g. c(1,2,3,4,5)[3:4] == c(3,4)
-#' @return A new Covariate object that contains only the Covs within the given range
+#' @return A new Cov object that contains only the Covs within the given range
 #' @author Marcin Imielinski
 #' @export
-'[.Chromunity' = function(obj, range){
+'[.Chrom' = function(obj, range){
   if (any(is.na(range)))
     stop('NA in subscripts not allowed')
 
@@ -1374,34 +1247,34 @@ ChromunityObj = R6::R6Class("Chromunity",
 
   ##Clone the object so we don't mess with the original
   ret = obj$clone()
-  ##Call the subset function of the Covariate class that will modify the cloned Covariate
+  ##Call the subset function of the Cov class that will modify the cloned Cov
   ret$subset(range)
 
   return (ret)
 }
 
-#' @name names.Chromunity
+#' @name names.Chrom
 #' @title title
 #' @description
 #'
-#' Overrides the names function for Covariate object
+#' Overrides the names function for Cov object
 #'
-#' @param obj Covariate This is the Covariate whose names we are extracting'
+#' @param obj Cov This is the Covariate whose names we are extracting'
 #' @return names of covariates
 #' @author Zoran Z. Gajic
 #' @export
-'names.Chromunity' = function(x) return (x$chid)
+'names.Chrom' = function(x) return (x$chid)
 
-#' @name length.Chromunity
-#' @title length.Chromunity
+#' @name length.Chrom
+#' @title length.Chrom
 #' @description
 #' Number of binsets in chromunity object 
 #'
-#' @param obj Covariate object that is passed to the length function
-#' @return number of covariates contained in the Covariate object as defined by length(Covariate$data)
+#' @param obj Cov object that is passed to the length function
+#' @return number of covariates contained in the Cov object as defined by length(Cov$data)
 #' @author Zoran Z. Gajic
 #' @export
-'length.Chromunity' = function(obj,...) return(obj$length)
+'length.Chrom' = function(obj,...) return(obj$length)
 
 
 ##########################################################################
@@ -1409,7 +1282,7 @@ ChromunityObj = R6::R6Class("Chromunity",
 #########################################################################
 
 
-#' @name Covariate
+#' @name Cov
 #' @title title
 #' @description
 #'
@@ -1439,11 +1312,11 @@ ChromunityObj = R6::R6Class("Chromunity",
 #' @param data, a list of covariate data that can include any of the covariate classes (GRanges, ffTrack, RleList, character)
 #' @param log logical flag specifying whether to log the numeric covariate, only applicable to numeric covariate
 #' @param count logical flag specifying whether to count the number of intervals 
-#' @return Covariate object that can be passed directly to the FishHook object constructor
-#' @author Zoran Z. Gajic, Marcin Imielinski
+#' @return Cov object that can be passed directly to the FishHook object constructor
+#' @author Marcin Imielinski
 #' @import R6
 #' @export
-Covariate = R6::R6Class('Covariate',
+Cov = R6::R6Class('Cov',
     public = list(
 
       ## See the class documentation
@@ -1540,7 +1413,7 @@ Covariate = R6::R6Class('Covariate',
 
         if (any(iix <<- grepl('\\W', params$name)))
         {
-          warning('Replacing spaces and special characters with "_" in Covariate names')
+          warning('Replacing spaces and special characters with "_" in Cov names')
           params$names[iix] = gsub('\\W+', '_', params$name[iix])
         }
         
@@ -1566,11 +1439,11 @@ Covariate = R6::R6Class('Covariate',
     ## Params:
     ## ... Other Covariates to be merged into this array, note that it can be any number of Covariates
     ## Return:
-    ## A single Covariate object that contains the contents of self and all passed Covariates
+    ## A single Cov object that contains the contents of self and all passed Covariates
     ## UI:
     ## None
     ## Notes:
-    ## This is linked to the c.Covariate override and the c.Covariate override should be used preferentially over this
+    ## This is linked to the c.Cov override and the c.Cov override should be used preferentially over this
     merge = function(...){
         return (c(self,...))
     },
@@ -1599,14 +1472,14 @@ Covariate = R6::R6Class('Covariate',
     },
 
     ## Params:
-    ## range, a numeric vector of the covariates to include. e.g. if the Covariate contains the covariates (A,B,C) and the range is c(2:3),
-    ## this indicates you wish to get a Covariate containing (B,C). NOTE THAT THIS DOES NOT RETURN A NEW COV_ARR, IT MODIFIES THE CURRENT.
+    ## range, a numeric vector of the covariates to include. e.g. if the Cov contains the covariates (A,B,C) and the range is c(2:3),
+    ## this indicates you wish to get a Cov containing (B,C). NOTE THAT THIS DOES NOT RETURN A NEW COV_ARR, IT MODIFIES THE CURRENT.
     ## Return:
-    ## None, this modifies the Covariate on which it was called
+    ## None, this modifies the Cov on which it was called
     ## UI:
     ## None
     ## Notes:
-    ## If you want to create a new Covariate containing certain covariates, use the '[' operator, e.g. Covariate[2:3]
+    ## If you want to create a new Cov containing certain covariates, use the '[' operator, e.g. Cov[2:3]
     subset = function(range, ...){
 
       private$pCovs = private$pCovs[range]
@@ -1652,10 +1525,10 @@ Covariate = R6::R6Class('Covariate',
     ## Return:
     ## Nothing
     ## UI:
-    ## Prints information about the Covariate to the console with all of covariates printed in order with variables printed alongside each covariate
+    ## Prints information about the Cov to the console with all of covariates printed in order with variables printed alongside each covariate
     print = function(...){
         if(length(private$pCovs) == 0){
-            fmessage('Empty Covariate Object')
+            fmessage('Empty Cov Object')
             return(NULL)
         }
 
@@ -1674,11 +1547,11 @@ Covariate = R6::R6Class('Covariate',
 
         ## out= sapply(c(1:length(private$pCovs)),
         ##     function(x){
-        ##         cat(c('Covariate Number: ' , x, '\nName: ', grepprivate$pnames[x],
+        ##         cat(c('Cov Number: ' , x, '\nName: ', grepprivate$pnames[x],
         ##         '\ntype: ',private$ptype[x], '\tsignature: ', private$psignature[x],
         ##         '\nfield: ',private$pfield[x], '\tpad: ', private$ppad[x],
         ##         '\nna.rm: ', private$pna.rm[x], '\tgrep: ', private$pgrep[x],
-        ##         '\nCovariate Class: ', class(private$pCovs[[x]]), '\n\n'), collapse = '', sep = '')
+        ##         '\nCov Class: ', class(private$pCovs[[x]]), '\n\n'), collapse = '', sep = '')
     }
     ),
 
@@ -1694,19 +1567,19 @@ Covariate = R6::R6Class('Covariate',
       ptype = c(),
       ## A vector of signatures for use with ffTrack, se fftab
       psignature = c(),
-      ## A character vector of field names for use with numeric covariates, see the Covariate class definition for more info
+      ## A character vector of field names for use with numeric covariates, see the Cov class definition for more info
       pfield = c(),
-      ## A numeric vector of paddings for each covariate, see the 'pad' param in Covariate class definition for more info
+      ## A numeric vector of paddings for each covariate, see the 'pad' param in Cov class definition for more info
       ppad = c(),
-      ## A logical vector for each covariate, see the 'na.rm' param in Covariate class definition for more info
+      ## A logical vector for each covariate, see the 'na.rm' param in Cov class definition for more info
       pna.rm = c(),
       ## logical vector specifying whether to log
       plog = c(),
       ## logical vector specifying whether to count
       pcount = c(),
-      ##  Valid Covariate Types
+      ##  Valid Cov Types
       COV.TYPES = c('numeric', 'interval'),
-      ##  Valid Covariate Classes
+      ##  Valid Cov Classes
       COV.CLASSES = c('GRanges', 'RleList', 'ffTrack', 'character')
     ),
 
@@ -1717,7 +1590,7 @@ Covariate = R6::R6Class('Covariate',
     ## class$active = value will call the active variable function with the value = value
     active = list(
 
-            ## Covariate Names
+            ## Cov Names
             ## Here we check to make sure that all names are of class chracter and that they are the same length as pCovs -> the internal covariate list
             ## If the names vector is equal in length to the pCovs list length we will allow the assignment
             ## If the pCovs list length is a multiple of the names vector, will will replicate the names vector such that it matches in length
@@ -1753,7 +1626,7 @@ Covariate = R6::R6Class('Covariate',
                 }
             },
 
-            ## Covariate type
+            ## Cov type
             ## Here we check to make sure that all types are of class chracter and that they are the same length as pCovs -> the internal covariate list
             ## We then check to make sure that each type is a valid type as defined by the COV.TYPES private parameter
             ## If the types vector is equal in length to the pCovs list length we will allow the assignment
@@ -1787,7 +1660,7 @@ Covariate = R6::R6Class('Covariate',
                 }
             },
 
-            ##Covariate Signature
+            ##Cov Signature
             ## Here we check to make sure that all signatures are list within lists  and that they are the same length as pCovs -> the internal covariate list
             ## If the signature vector is equal in length to the pCovs list length we will allow the assignment
             ## If the pCovs list length is a multiple of the signature vector, will will replicate the signature vector such that it matches in length
@@ -1811,7 +1684,7 @@ Covariate = R6::R6Class('Covariate',
                 }
             },
 
-            ##Covariate Field
+            ##Cov Field
             ## Here we check to make sure that all fields are of class chracter and that they are the same length as pCovs -> the internal covariate list
             ## If the fields vector is equal in length to the pCovs list length we will allow the assignment
             ## If the pCovs list length is a multiple of the fields vector, will will replicate the fields vector such that it matches in length
@@ -1838,7 +1711,7 @@ Covariate = R6::R6Class('Covariate',
                 }
             },
 
-          ## Covariate log
+          ## Cov log
           ## Here we check to make sure that all pad are of class numeric and that they are the same length as pCovs -> the internal covariate list
           ## If the pad vector is equal in length to the pCovs list length we will allow the assignment
           ## If the pCovs list length is a multiple of the pad vector, will will replicate the pad vector such that it matches in length
@@ -1864,7 +1737,7 @@ Covariate = R6::R6Class('Covariate',
             }
           },
           
-          ## Covariate Paddinig
+          ## Cov Paddinig
           ## Here we check to make sure that all pad are of class numeric and that they are the same length as pCovs -> the internal covariate list
           ## If the pad vector is equal in length to the pCovs list length we will allow the assignment
           ## If the pCovs list length is a multiple of the pad vector, will will replicate the pad vector such that it matches in length
@@ -1892,7 +1765,7 @@ Covariate = R6::R6Class('Covariate',
 
 
 
-            ## Covariate Padding
+            ## Cov Padding
             ## Here we check to make sure that all pad are of class numeric and that they are the same length as pCovs -> the internal covariate list
             ## If the pad vector is equal in length to the pCovs list length we will allow the assignment
             ## If the pCovs list length is a multiple of the pad vector, will will replicate the pad vector such that it matches in length
@@ -1921,7 +1794,7 @@ Covariate = R6::R6Class('Covariate',
 
 
 
-            ##Covariate na.rm
+            ##Cov na.rm
             ## Here we check to make sure that all na.rms are of class logical and that they are the same length as pCovs -> the internal covariate list
             ## If the na.rms vector is equal in length to the pCovs list length we will allow the assignment
             ## If the pCovs list length is a multiple of the na.rms vector, will will replicate the na.rms vector such that it matches in length
@@ -1950,7 +1823,7 @@ Covariate = R6::R6Class('Covariate',
 
            
 
-            ##Covariate Covs
+            ##Cov Covs
             data = function(value) {
                 if(!missing(value)){
                     private$pCovs = value
@@ -1962,61 +1835,61 @@ Covariate = R6::R6Class('Covariate',
     ),
 )
 
-#' @name c.Covariate
+#' @name c.Cov
 #' @title title
 #' @description
 #'
 #' Override the c operator for covariates so that you can merge them like a vector
 #'
-#' @param ... A series of Covariates, note all objects must be of type Covariate
-#' @return Covariate object that can be passed directly into the FishHook object constructor that contains all of the Covariate covariates
+#' @param ... A series of Covariates, note all objects must be of type Cov
+#' @return Cov object that can be passed directly into the FishHook object constructor that contains all of the Cov covariates
 #' Passed in the ... param
 #' @author Zoran Z. Gajic
 #' @export
-'c.Covariate' = function(...){
+'c.Cov' = function(...){
 
-  ##Ensure that all params are of type Covariate
-    Covariates = list(...)
-    isc = sapply(Covariates, function(x)  class(x)[1] == 'Covariate')
+  ##Ensure that all params are of type Cov
+    Covs = list(...)
+    isc = sapply(Covs, function(x)  class(x)[1] == 'Cov')
 
     if(any(!isc)){
-        stop('Error: All inputs must be of class Covariate.')
+        stop('Error: All inputs must be of class Cov.')
     }
 
     ## Merging vars of the covariates
-  names  = unlist(lapply(Covariates, function(x) x$names))
-  type  = unlist(lapply(Covariates, function(x) x$type))
-  signature  = unlist(lapply(Covariates, function(x) x$signature))
-  field  = unlist(lapply(Covariates, function(x) x$field))
-  pad  = unlist(lapply(Covariates, function(x) x$pad))
-  na.rm  = unlist(lapply(Covariates, function(x) x$na.rm))
-  log  = unlist(lapply(Covariates, function(x) x$log))
-  count  = unlist(lapply(Covariates, function(x) x$count))
+  names  = unlist(lapply(Covs, function(x) x$names))
+  type  = unlist(lapply(Covs, function(x) x$type))
+  signature  = unlist(lapply(Covs, function(x) x$signature))
+  field  = unlist(lapply(Covs, function(x) x$field))
+  pad  = unlist(lapply(Covs, function(x) x$pad))
+  na.rm  = unlist(lapply(Covs, function(x) x$na.rm))
+  log  = unlist(lapply(Covs, function(x) x$log))
+  count  = unlist(lapply(Covs, function(x) x$count))
 
-  ## Merging Covariates
-  covs = lapply(Covariates, function(x) x$data)
+  ## Merging Covs
+  covs = lapply(Covs, function(x) x$data)
   Covs = unlist(covs, recursive = F)
 
-  ##Creating a new Covariate and assigning all of the merged variables to it
-  ret = Covariate$new(data = Covs, name = names, type = type, signature = signature, field = field, pad = pad, na.rm = na.rm, grep = grep)
+  ##Creating a new Cov and assigning all of the merged variables to it
+  ret = Cov$new(data = Covs, name = names, type = type, signature = signature, field = field, pad = pad, na.rm = na.rm, grep = grep)
   
   return(ret)
 }
 
 
 
-#' @name [.Covariate
+#' @name [.Cov
 #' @title title
 #' @description
 #'
-#' Overrides the subset operator x[] for use with Covariate to allow for vector like subsetting
+#' Overrides the subset operator x[] for use with Cov to allow for vector like subsetting
 #'
-#' @param obj Covariate This is the Covariate to be subset
-#' @param range vector This is the range of Covariates to return, like subsetting a vector. e.g. c(1,2,3,4,5)[3:4] == c(3,4)
-#' @return A new Covariate object that contains only the Covs within the given range
+#' @param obj Cov This is the Cov to be subset
+#' @param range vector This is the range of Covs to return, like subsetting a vector. e.g. c(1,2,3,4,5)[3:4] == c(3,4)
+#' @return A new Cov object that contains only the Covs within the given range
 #' @author Zoran Z. Gajic
 #' @export
-'[.Covariate' = function(obj, range){
+'[.Cov' = function(obj, range){
   if (any(is.na(range)))
     stop('NA in subscripts not allowed')
 
@@ -2025,39 +1898,39 @@ Covariate = R6::R6Class('Covariate',
 
   ##Clone the object so we don't mess with the original
   ret = obj$clone()
-  ##Call the subset function of the Covariate class that will modify the cloned Covariate
+  ##Call the subset function of the Cov class that will modify the cloned Cov
   ret$subset(range)
   return (ret)
 }
 
 
-#' @name names.Covariate
+#' @name names.Cov
 #' @title title
 #' @description
 #'
-#' Overrides the names function for Covariate object
+#' Overrides the names function for Cov object
 #'
-#' @param obj Covariate This is the Covariate whose names we are extracting'
+#' @param obj Cov This is the Cov whose names we are extracting'
 #' @return names of covariates
 #' @author Zoran Z. Gajic
 #' @export
-'names.Covariate' = function(x){
-    ##Call the subset function of the Covariate class that will modify the cloned Covariate
+'names.Cov' = function(x){
+    ##Call the subset function of the Cov class that will modify the cloned Cov
     return (x$names)
 }
 
 
-#' @name length.Covariate
+#' @name length.Cov
 #' @title title
 #' @description
 #'
-#' Overrides the length function 'length(Covariate)' for use with Covariate
+#' Overrides the length function 'length(Cov)' for use with Cov
 #'
-#' @param obj Covariate object that is passed to the length function
-#' @return number of covariates contained in the Covariate object as defined by length(Covariate$data)
+#' @param obj Cov object that is passed to the length function
+#' @return number of covariates contained in the Cov object as defined by length(Cov$data)
 #' @author Zoran Z. Gajic
 #' @export
-'length.Covariate' = function(obj,...){
+'length.Cov' = function(obj,...){
     return(length(obj$data))
 }
 
@@ -2066,12 +1939,12 @@ Covariate = R6::R6Class('Covariate',
 #' @title covariate
 #' @description
 #'
-#' function to initialize Covariates for passing to FishHook object constructor.
+#' function to initialize Covs for passing to FishHook object constructor.
 #'
 #' Can also be initiated by passing a vector of multiple vectors of equal length, each representing one of the internal variable names
 #' You must also include a list containg all of the covariates (Granges, chracters, RLELists, ffTracks)
 #'
-#' Covariate serves to mask the underlieing list implemenations of Covariates in the FishHook Object.
+#' Cov serves to mask the underlieing list implemenations of Covariates in the FishHook Object.
 #' This class attempts to mimic a vector in terms of subsetting and in the future will add more vector like operations.
 #'
 #'
@@ -2094,13 +1967,14 @@ Covariate = R6::R6Class('Covariate',
 #' @param grep, a chracter vector of  grep for use with sequence covariates of class ffTrack
 #' The function fftab is called during the processing of ffTrack sequence covariates grep is used to specify inexact matches (see fftab)
 #' @param data, a list of covariate data that can include any of the covariate classes (GRanges, ffTrack, RleList, character)
-#' @return Covariate object that can be passed directly to the FishHook object constructor
+#' @return Cov object that can be passed directly to the FishHook object constructor
 #' @author Zoran Z. Gajic
 #' @import R6
 #' @export
+
 covariate = function(data = NULL, field = as.character(NA), name = as.character(NA), log = TRUE, count = TRUE, pad = 0, type = as.character(NA),
                signature = as.character(NA), na.rm = NA, grep = NA){
-  Covariate$new(name = name, data = data, pad = pad, type = type, count = count, log = log, signature = signature,
+  Cov$new(name = name, data = data, pad = pad, type = type, count = count, log = log, signature = signature,
                 field = field, na.rm = na.rm, grep = grep)
 }
 
@@ -2320,314 +2194,3 @@ glm.nb.fh = function (formula, data, weights, subset, na.action, start = NULL,
 
 
 
-################
-## Legacy code
-################
-
-
-## ##############################
-## ## chromunity
-## ##############################
-## #' @name chromunity
-## #'
-## #' @title Discovery of communities in Pore-C concatemers
-## #' 
-## #' @description This function takes in a GRanges with each row as Pore-C monomer with a metadata of the corresponding concatemer id 
-## #' 
-## #' @export
-## #' @param this.pc.gr is the GRanges with each row as Pore-C monomer and must have a cmetadata column with corresponding concatemer annotation. The column should be called "read_idx"
-## #' 
-## #' @param k.knn numeric threshoold on k nearest concatemer neighbors to be used to create the graph. 
-## #' 
-## #' @param k.min numeric the threshold to number of concatemers pairs to be considered "similar"
-## #' 
-## #' @param tiles GRanges object dividing the genome in a fixed size bin to be defined by user
-## #' 
-## #' @param which.gr the GRanges for the window of interest
-## #'
-## #' @param filter_local_number boolean (default == FALSE) filters out concatemers in the window that fall below filter_local_thresh length
-## #' 
-## #' @param filter_local_thresh (default == NULL) numeric minimum length of concatemer to be considered for downstream analyses. To be set if filter_local_number == TRUE.
-## #' @param take_sub_sample take a sub sample of concatemers. A random sample of fraction frac is taken
-## #' 
-## #' @param frac fraction of concatemer to be subsampled. To be set if take_sub_sample == TRUE.
-## #'
-## #' @param seed.n numeric set a seed when doing random subsampling
-## #' 
-## #' @return \code{chromunity} returns input GRanges with additional columns as follows:
-## #' 
-## #'    \item{community}{  numeric; \cr
-## #'              the community annotation for each concatemer
-## #'    }
-## #'    \item{num.memb}{  numeric; \cr
-## #'              number of members in each community
-## #' 
-## #' @author Aditya Deshpande
-
-
-## chromunity <- function(this.pc.gr, k.knn = 10, k.min = 1, tiles, which.gr = which.gr, filter_local_number = FALSE, filter_local_thresh = NULL, take_sub_sample = FALSE, frac = 0.25, seed.n = 154){
-    
-##     reads = this.pc.gr 
-##     if (filter_local_number){
-##         message(paste0("Filtering out reads < ", filter_local_thresh))
-##         reads = gr2dt(reads)
-##         setkeyv(reads, c("seqnames", "start"))
-##         reads[, max.local.dist := end[.N]-start[1], by = read_idx]
-##         reads = reads[max.local.dist > filter_local_thresh]
-##         reads = dt2gr(reads)
-##     }
-    
-##     reads$tix = gr.match(reads, tiles)
-##     reads = as.data.table(reads)[, count := .N, by = read_idx]
-##     mat = dcast.data.table(reads[count > 2 ,]  %>% gr2dt, read_idx ~ tix, value.var = "strand", fill = 0)
-##     mat2 = mat[, c(list(read_idx = read_idx), lapply(.SD, function(x) x >= 1)),.SDcols = names(mat)[-1]]
-##     mat2 = suppressWarnings(mat2[, "NA" := NULL])
-##     reads.ids = mat2$read_idx
-##     mat2 = as.data.table(lapply(mat2, as.numeric))
-
-##     if (take_sub_sample){
-##         tot.num = nrow(mat2[rowSums(mat2[, -1]) > 1, ])
-##         message(paste0("Total number of rows are: ", tot.num))
-##         message("taking a subsample")
-##         number.to.subsample = pmax(round(tot.num*frac), 1000)
-##         message(paste0("Number sampled: ", number.to.subsample))
-##         set.seed(seed.n)
-##         gt = mat2[rowSums(mat2[, -1]) > 1, ][sample(.N, number.to.subsample), ] 
-##     }
-
-##     else {
-##         gt = mat2[rowSums(mat2[, -1]) > 1, ]
-##     }
-    
-##     ubx = gt$read_idx
-##     message("Matrices made")
-##     gc()
-
-##     ## Prepare pairs for KNN
-##     pairs = t(do.call(cbind, apply(gt[,setdiff(which(colSums(gt) > 1),1), with = FALSE] %>% as.matrix, 2, function(x) combn(which(x!=0),2))))
-##     p1 = gt[pairs[,1], -1]
-##     p2 = gt[pairs[,2], -1]
-##     matching = rowSums(p1 & p2)
-##     total = rowSums(p1 | p2)
-##     dt = data.table(bx1 = pairs[,1], bx2 = pairs[,2], mat = matching, tot = total)[, frac := mat/tot]
-##     dt2 = copy(dt)
-##     dt2$bx2 = dt$bx1
-##     dt2$bx1 = dt$bx2
-##     dt3 = rbind(dt, dt2)
-##     dt3$nmat = dt3$mat
-##     dt3$nfrac = dt3$frac
-##     setkeyv(dt3, c('nfrac', 'nmat'))
-##     dt3 = unique(dt3)
-##     dt3.2 = dt3[order(nfrac, nmat, decreasing = T)]
-##     message("Pairs made")
-##     gc()
-
-##     ## Clustering    
-##     k = k.knn
-##     knn.dt = dt3.2[mat > 2 & tot > 2, .(knn = bx2[1:k]), by = bx1][!is.na(knn), ]
-##     setkey(knn.dt)
-##     knn = sparseMatrix(knn.dt$bx1, knn.dt$knn, x = 1)
-##     knn.shared = knn %*% knn
-##     message("KNN done")
-
-##     ## community find in graph where each edge weight is # nearest neighbors (up to k) shared between the two nodes
-##     KMIN = k.min
-##     A = knn.shared*sign(knn.shared > KMIN)
-##     A[cbind(1:nrow(A), 1:nrow(A))] = 0
-##     A <- as(A, "matrix")
-##     A <- as(A, "sparseMatrix")
-##     A = A + t(A)
-##     G = graph.adjacency(A, weighted = TRUE, mode = 'undirected')
-##     cl.l = cluster_fast_greedy(G)
-##     cl = cl.l$membership
-##     message("Communities made")
-##     memb.dt = data.table(read_idx = ubx[1:nrow(A)], community = cl)
-##     reads = merge(reads, memb.dt, by = "read_idx")
-##     reads[, num.memb := length(unique(read_idx)), by = community]
-##     reads = dt2gr(reads)
-##     return(reads)
-## }
-
-
-##############################
-## annotate_multimodal_communities
-##############################
-#' @name  annotate_multimodal_communities 
-#' 
-#'
-#' @title Annotates communities that are very dense with respect to genomic coordinates. 
-#' 
-#' @description Using the nature of distribution of contacts on genomic coordinates, annotates community that are local  
-#' 
-#' @export
-#' @param granges GRanges output from chromunity function
-#' 
-#' @param which.gr the GRanges for the window of interest
-#'
-#' @param min.memb numeric minimum number of members needed to be in a community to be considered for further analyses
-#' 
-#' @return \code{annotate_local_communities} returns input GRanges with additional columns as follows:
-#' 
-#'    \item{multimodal}{  boolean; \cr
-#'              whether a community had multimodal contacts based on parameters set by user
-#'    }
-#'  
-#' @author Aditya Deshpande
-
-annotate_multimodal_communities <- function(granges, which.gr, min.memb = 50){
-    this.dt = gr2dt(granges)[num.memb > min.memb]
-    ind.int = unique(this.dt$community)
-    dt.stat = data.table()
-    for (i in 1:length(ind.int)){
-        which.int = (ind.int)[i]  
-        message(which.int)
-        dt.int = this.dt[community == which.int]
-        dt.int.tmp = gr2dt(dt2gr(dt.int) %&&% which.gr)
-        setkeyv(dt.int.tmp, c("seqnames", "start"))
-        dt.sum = suppressWarnings(gr.sum(dt2gr(dt.int.tmp)+1e3))
-        y.max.val = max(dt.sum$score)
-        peak.gr = find_multi_modes( dt.sum[-1], w =  round(0.05*length(dt.sum[-1])), distance = 0.1*width(which.gr))
-        status = unique(peak.gr$bimodal)
-        dt.stat = rbind(dt.stat, data.table(community = which.int, multimodal = status))
-    }
-
-    this.dt = merge(this.dt, dt.stat, by = "community", allow.cartesian = T)
-    return(dt2gr(this.dt))
-}
-        
-        
-
-##############################
-## find_multi_modes
-##############################
-#' @name  find_multi_modes 
-#' 
-#'
-#' @title Determines if a community has multimodal ditribution of contacts along genome
-#' 
-#' @description Using loess smoothing, determines if a community has multimodal ditribution of contacts along genome  
-#' 
-#' @export
-#' @param granges GRanges output from chromunity function for one community
-#' 
-#' @param x.field This is the X axis along which smoothing is done
-#' 
-#' @param y.field values to be smoothed
-#'
-#' @param w window size over which to smooth the distribution
-#' 
-#' @param distance numeric genomic distance beyond which a peak is not considered local 
-#' 
-#' @return \code{find_multi_modes} returns boolean value if more than one peak is present
-#'  
-#' @author Aditya Deshpande
-
-
-find_multi_modes <- function(granges, x.field = "start", y.field = "score", w = 1,  distance = 1e5) {
-    which.chr = seqlevels(granges)
-    x = x = gr2dt(granges)$start
-    y = values(granges)[, y.field]
-    n = length(y)
-    y.smooth <- loess(y ~ x, span = 0.1)$fitted
-    y.max <- rollapply(zoo(y.smooth), 2*w+1, max, align="center")
-    delta <- y.max - y.smooth[-c(1:w, n+1-1:w)]
-    i.max <- which(delta <= 0) + w
-    max.gr <- granges[i.max]
-    if (any(gr.dist(max.gr) > distance)){
-        max.gr$bimodal = TRUE
-    } else {
-        max.gr$bimodal = FALSE
-    }
-    return(max.gr)
-}
-
-## #' @name chromunity
-## #' @description
-## #'
-## #' Runs genome-wide chromunity detection across a sliding or provided genomic window
-## #'
-## #' @param concatemers GRanges with $cid
-## #' @param resolution bin size for community detection [5e4]
-## #' @param region region to run on [si2gr(concatemers)]
-## #' @param windows GRanges or GRangesList of windows to test, if empty will be generated by splitting region GRanges into window.size tiles with stride stride
-## #' @param window.size window size to do community detection within
-## #' @param tiles.k.knn KNN parameter specifying how many nearest neighbors to sample when building KNN graph
-## #' @param peak.thresh peak threshold with which to call a peak
-## #' @param k.min minimal number of nearest neighbors an edge in KNN graph needs to have before community detection
-## #' @param pad integer pad to use when computing the footprint of each chromunity and finding peak regions which become binsets
-## #' @return list with items $binset,  $support, $params: $binsets is GRanges of bins with field $bid corresponding to binset id and $support which is the concatemer community supporting the binset which are GRanges with $bid
-## #' @author Aditya Deshpande, Marcin Imielinski
-## #' @export
-## chromunity = function(concatemers, resolution = 5e4, region = si2gr(concatemers), windows = NULL, window.size = 2e6, max.slice = 1e6, min.support = 5, stride = window.size/2, mc.cores = 20, k.knn = 25, k.min = 5, pad = 1e3, peak.thresh = 0.85, seed = 42, verbose = TRUE)
-## {
-##   if (is.null(windows))
-##     windows = gr.start(gr.tile(region, stride))+window.size/2
-
-##   if (inherits(windows, 'GRanges'))
-##     windows = split(windows, 1:length(windows))
-
-##   if (is.null(concatemers$cid))
-##   {
-##       if ('read_idx' %in% names(values(concatemers)))
-##         names(values(concatemers))[match('read_idx', names(values(concatemers)))] = 'cid'
-##       else
-##         stop("concatemer GRanges must have metadata column $cid or $read_idx specifying the concatemer id")
-##   }
-  
-##   params = data.table(k.knn = k.knn, k.min = k.min, seed = seed)
-
-##   bins = gr.tile(reduce(gr.stripstrand(unlist(windows))), 5e4)[, c()]
-
-##   if (verbose) cmessage('Generated ', length(bins), ' bins across ', length(windows), ' windows')
-
-##   if (verbose) cmessage('Matching concatemers with bins, and bins with windows using gr.match with max.slice ', max.slice, ' and ', mc.cores, ' cores')
-
-##   ## (batch) match up concatemers with binids
-##   concatemers$binid = gr.match(concatemers, bins, max.slice = max.slice, mc.cores =  mc.cores, verbose = verbose)
-
-##   ## match window ids and bins 
-##   binmap = bins %*% grl.unlist(windows)[, c('grl.ix')] %>% as.data.table %>% setnames('query.id', 'binid') %>% setnames('grl.ix', 'winid') %>% setkeyv('winid')
-
-##   ## cycle through (possibly complex) windows call cluster_concatemers and convert to gr.sums
-##   winids = unique(binmap$winid)
-
-##   if (verbose) cmessage('Starting concatemer community detection across ', length(winids), ' windows')
-
-##   cc = pbmclapply(winids, mc.cores = mc.cores, function(win)
-##   {
-##     suppressWarnings({
-##       these.bins = binmap[.(win), ]
-##       cc = concatemer_communities(concatemers %Q% (binid %in% these.bins$binid), k.knn = k.knn, k.min = k.min, seed = seed, verbose = verbose>1)
-##       if (length(cc))
-##       {
-##         cc = cc[cc$support >= min.support]
-##         cc$winid = win
-##       }
-##     })
-##     cc
-##   }) %>% do.call(grbind, .)
-
-##   if (!length(cc))
-##     return(Chromunity(concatemers = cc, chromunities = GRanges(), params = params))
-
-##   uchid = unique(cc$chid)
-
-##   if (verbose) cmessage('Analyzing gr.sums associated with ', length(uchid), ' concatemer communities to generate binsets')
-
-##   binsets = pbmclapply(uchid, mc.cores = mc.cores, function(this.chid)
-##   {
-##     suppressWarnings({
-##       this.cc = cc %Q% (chid == this.chid)
-##       peaks = gr.sum(this.cc + pad) %>% gr.peaks('score')
-##       binset = bins[, c()] %&% (peaks[peaks$score > quantile(peaks$score, peak.thresh)])
-##       if (length(binset))
-##       {
-##         binset$chid = this.chid
-##         binset$winid = this.cc$winid[1]
-##       }
-##     })
-##     binset
-##   })  %>% do.call(grbind, .)
-
-##   return(Chromunity(concatemers = cc[cc$chid %in% binsets$chid], binsets = binsets, meta = params))
-## }
