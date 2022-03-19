@@ -6,7 +6,8 @@
 #' @importFrom data.table setkeyv
 #' @importFrom data.table setnames
 #' @importFrom data.table transpose
-#' @importFrom Matrix sparseMatrix 
+#' @importFrom Matrix sparseMatrix
+#' @importFrom plyr round_any
 #' @import zoo
 #' @import arrow
 #' @importFrom pbmcapply pbmclapply 
