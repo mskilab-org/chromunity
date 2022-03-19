@@ -796,6 +796,7 @@ chromunity = function(concatemers, resolution = 5e4, region = si2gr(concatemers)
         binset$chid = this.chid
         binset$bid = this.chid
         binset$winid = this.cc$winid[1]
+        binset = gr.reduce(binset)
       }
     })
     binset
