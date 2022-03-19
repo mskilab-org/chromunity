@@ -621,11 +621,12 @@ sscore = function(annotated.binsets, model, verbose = TRUE)
 #' @param covariates covariates to use when annotating binsets and background.binsets
 #' @param k cardinality k to which to limit k-power set for each binset or background.binset
 #' @param gg gGraph around which to compute bin to bin distances in binsets and also extract copy numbers using node / edge feature $cn
+#' @param maxit glmnb max iterations
 #' @param mc.cores threads to parallelize
 #' @param verbose logical flag whether to fit
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
-synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL, covariates = NULL, annotated.binsets = NULL, k = 5, gg = NULL, theta = NULL, mc.cores = 5, verbose = TRUE, resolution = 5e4)
+synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL, covariates = NULL, annotated.binsets = NULL, k = 5, gg = NULL, mc.cores = 5, verbose = TRUE, resolution = 5e4, maxit = 50)
 {
   if (!inherits(binsets, 'GRanges'))
     {
@@ -634,10 +635,6 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
         stop('binsets failed conversion to GRanges, please provide valid GRnges')
     }
 
-  if (is.null(theta)){
-      stop('Please provide theta from step 1')
-  }
-  
   if (is.null(background.binsets) & is.null(model))
   {
     if (verbose) smessage('Computing random background binsets using features of provided binsets')
@@ -651,7 +648,7 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
     annotated.background.binsets = annotate(binsets = background.binsets, concatemers = concatemers, gg = gg, covariates = covariates, k = k, mc.cores = mc.cores, verbose = verbose)
 
     if (verbose) smessage('Fitting model to k-power sets of annotated background binsets')
-    model = fit(annotated.background.binsets, nb = TRUE, return.model = TRUE, verbose = verbose)
+    model = fit(annotated.background.binsets, nb = TRUE, return.model = TRUE, verbose = verbose, maxit = maxit)
   }
 
   if (is.null(annotated.binsets))
@@ -665,7 +662,7 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
   setkey(scored.binsets, bid)
   ubid = unique(scored.binsets$bid)
 
-  res = pbmclapply(ubid, function(this.bid) muffle(dflm(glm.nb.fh(data = scored.binsets[.(this.bid),], count ~ multiway + offset(log(count.predicted)), theta = theta, control = glm.control(maxit = 50)))[2, ][, name := this.bid])) %>% rbindlist
+  res = pbmclapply(ubid, function(this.bid) muffle(dflm(glm.nb.fh(data = scored.binsets[.(this.bid),], count ~ multiway + offset(log(count.predicted)), theta = model$model$theta, control = glm.control(maxit = maxit)))[2, ][, name := this.bid])) %>% rbindlist
   setnames(res, 'name', 'bid')
 
   return(res)
@@ -1311,7 +1308,7 @@ ChromunityObj = R6::R6Class("Chromunity",
 #' @param data, a list of covariate data that can include any of the covariate classes (GRanges, ffTrack, RleList, character)
 #' @param log logical flag specifying whether to log the numeric covariate, only applicable to numeric covariate
 #' @param count logical flag specifying whether to count the number of intervals 
-#' @return Covariate object that can be passed directly to the FishHook object constructor
+#' @return Covariate object that can be passed directly to the Chromunity object constructor
 #' @author Marcin Imielinski
 #' @import R6
 #' @export
@@ -1841,7 +1838,7 @@ Covariate = R6::R6Class('Covariate',
 #' Override the c operator for covariates so that you can merge them like a vector
 #'
 #' @param ... A series of Covariates, note all objects must be of type Covariate
-#' @return Covariate object that can be passed directly into the FishHook object constructor that contains all of the Covariate covariates
+#' @return Covariate object that can be passed directly into the Chromunity object constructor that contains all of the Covariate covariates
 #' Passed in the ... param
 #' @author Zoran Z. Gajic
 #' @export
@@ -1938,12 +1935,12 @@ Covariate = R6::R6Class('Covariate',
 #' @title covariate
 #' @description
 #'
-#' function to initialize Covariates for passing to FishHook object constructor.
+#' function to initialize Covariates for passing to Chromunity object constructor.
 #'
 #' Can also be initiated by passing a vector of multiple vectors of equal length, each representing one of the internal variable names
 #' You must also include a list containg all of the covariates (Granges, chracters, RLELists, ffTracks)
 #'
-#' Covariate serves to mask the underlieing list implemenations of Covariates in the FishHook Object.
+#' Covariate serves to mask the underlieing list implemenations of Covariates in the Chromunity Object.
 #' This class attempts to mimic a vector in terms of subsetting and in the future will add more vector like operations.
 #'
 #'
@@ -1966,7 +1963,7 @@ Covariate = R6::R6Class('Covariate',
 #' @param grep, a chracter vector of  grep for use with sequence covariates of class ffTrack
 #' The function fftab is called during the processing of ffTrack sequence covariates grep is used to specify inexact matches (see fftab)
 #' @param data, a list of covariate data that can include any of the covariate classes (GRanges, ffTrack, RleList, character)
-#' @return Covariate object that can be passed directly to the FishHook object constructor
+#' @return Covariate object that can be passed directly to the Chromunity object constructor
 #' @author Zoran Z. Gajic
 #' @import R6
 #' @export
