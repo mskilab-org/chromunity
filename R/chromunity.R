@@ -454,6 +454,7 @@ annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromos
   if (verbose) smessage('Computing min median max distances per setid')
   ## dists = sub.binsets[, bindist[as.data.table(expand.grid(i = binid, j = binid))[i<j, ], .(dist = c('min.dist', 'mean.dist', 'max.dist'), value = as.numeric(summary(distance+1, na.rm = T)[c(1, 4, 6)]))], by = .(setid, bid)] %>% dcast(bid + setid ~ dist, value.var = 'value')
 
+  sub.binsets = sub.binsets[tot > 1]
   ubid = unique(sub.binsets$bid) ## split up to lists to leverage pbmclapply
   ubidl = split(ubid, ceiling(runif(length(ubid))*numchunks)) ## randomly chop up ubid into twice the number of mc.coreso
   dists = pbmclapply(ubidl, mc.cores = mc.cores, function(bids)
