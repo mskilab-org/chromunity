@@ -34,3 +34,7 @@ Install chromunity
 ```R
 devtools::install_github('mskilab/chromunity')
 ```
+Documentation 
+------------
+
+[chromunity Tutorial](http://mskilab.com/chromunity/tutorial.html)
