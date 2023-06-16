@@ -10,6 +10,7 @@ library(igraph)
 library(skitools)
 library(plyr)
 library(MASS)
+library(devtools)
 
 example_gr.path = system.file("extdata", "example_gr.rds", package = 'chromunity')
 window_gr.path = system.file("extdata", "window_gr.rds", package = 'chromunity')
@@ -28,11 +29,18 @@ test_that("parquet2gr", {
     expect_error(parquet2gr(example_dir2))
 })
 
-test_that("chromunity", {
+test_that("sliding_window_chromunity", {
     example_gr = readRDS(example_gr.path)
-    this.chrom = chromunity(concatemers = example_gr, resolution = 1e5, window.size = 5e6, mc.cores = 2)
+    this.chrom = sliding_window_chromunity(concatemers = example_gr, chr = 'chr12', resolution = 1e5, window.size = 5e6, mc.cores = 2)
     expect_identical(class(this.chrom)[1], "Chromunity")
 })
+
+test_that("re_chromunity", {
+    example_gr = readRDS(example_gr.path)
+    this.chrom = re_chromunity(concatemers = example_gr, resolution = 1e5, window.size = 5e6, mc.cores = 2)
+    expect_identical(class(this.chrom)[1], "Chromunity")
+})
+
 
 test_that("annotate", {
     example_chrom = readRDS(chromunity_out.path)
@@ -48,8 +56,11 @@ test_that("synergy", {
     example_chrom = readRDS(chromunity_out.path)
     binsets = gr2dt(example_chrom$binsets)
     binsets[, c := .N, by = bid]
-    binsets = dt2gr(binsets[c > 1])
-    this.synergy = synergy(binsets = binsets, concatemers = example_chrom$concatemers, annotated.binsets = example_annot, resolution = 1e5, maxit = 10, mc.cores = 2)
+    binsets = dt2gr(binsets[c > 1])  
+    back_binsets = re_background(binsets)
+    back_annot = annotate(back_binsets, concatemers = example_chrom$concatemers)
+    back_model = fit(back_annot)
+    this.synergy = synergy(binsets = binsets, concatemers = example_chrom$concatemers, model=back_model, annotated.binsets = example_annot, resolution = 1e5, maxit = 10, mc.cores = 2)
     expect_identical(class(this.synergy)[1], "data.table")
 })
 

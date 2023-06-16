@@ -483,8 +483,6 @@ annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromos
   ## bin vs concatemer overlaps
   if (verbose) smessage('Overlapping ', length(binsets), ' bins with ', length(concatemers), ' monomers')
 
-  binsets
-  concatemers
   ov = binsets %*% concatemers[, 'cid'] %>% as.data.table
   ##
   if (verbose) smessage('Computing bin by bin pairwise distance')
@@ -784,14 +782,12 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
     {
       binsets = muffle(dt2gr(binsets))
       if (is.null(binsets))
-        stop('binsets failed conversion to GRanges, please provide valid GRnges')
+        stop('binsets failed conversion to GRanges, please provide valid GRanges')
     }
 
   if (is.null(background.binsets) & is.null(model))
   {
-    if (verbose) smessage('Computing random background binsets using features of provided binsets')
-    background.binsets = background(binsets, n = 1500, mc.cores = mc.cores, resolution = resolution)
-    background.binsets = background.binsets[!bid %in% background.binsets[width < resolution]$bid]
+    stop('Please provide valid background binsets and model')
   }
   
   if (is.null(model))
@@ -1370,7 +1366,7 @@ concatemer_chromunity_sliding <- function (concatemers, k.knn = 10, k.min = 1, t
 #'
 #' Given n binsets generates random "background" binsets that mirrors the input binset characteristics with respect to chromosome, width, and distance.
 #'
-#' @param chrtomosome the chromosome to work on, string.
+#' @param chromosome the chromosome to work on, string.
 #' @param binsets GRanges of bins with fields seqnames, start, end, and $bid specifying bin-set id
 #' @param n number of binsets to generate [1000]
 #' @param resolution to use for the simulation [5e4]
