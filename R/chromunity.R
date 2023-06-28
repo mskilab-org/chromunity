@@ -25,7 +25,6 @@
 
 globalVariables(c("::", ":::", "num.memb", "community", "max.local.dist", "read_idx", "as.data.table", "count", "dcast.data.table", "combn", "tot", "copy", "nfrac", "nmat", ".", "bx2", "bx1", "as", "seqlevels", "loess", ".N", ".SD", ":="))
 
-
 #' @name parquet2gr
 #' @description
 #' Converts parquet format from Pore-C snakemake pipeline to a single gRanges object
@@ -2622,6 +2621,307 @@ glm.nb.fh = function (formula, data, weights, subset, na.action, start = NULL,
     fit$control <- control
     fit$offset <- offset
     fit
+}
+
+
+
+
+########
+#' @name muffle
+#' @title muffle
+#'
+#' Runs code returning NULL is there is any error
+#'
+#' @param code R code to eval while suppressing all errors
+#' @param ... additional tryCatch arguments
+#' @return output of evaluated R code or NULL if error
+#' @author Marcin Imielinski
+#' @export
+#########
+muffle = function(code, ...)
+{
+  return(tryCatch(code, error = function(e) NULL, ...))
+}
+
+
+
+#' @name dflm
+#' @title dflm
+#' @description
+#'
+#' Formats lm, glm, or fisher.test outputs into readable data.table
+#'
+#' @export
+dflm = function(x, last = FALSE, nm = '')
+{
+  if (is.null(x))
+    out = data.frame(name = nm, method = as.character(NA), p = as.numeric(NA), estimate = as.numeric(NA), ci.lower = as.numeric(NA),  ci.upper = as.numeric(NA), effect = as.character(NA))
+  else if (any(c('lm', 'betareg') %in% class(x)))
+  {
+    
+    coef = as.data.frame(summary(x)$coefficients)
+    colnames(coef) = c('estimate', 'se', 'stat', 'p')
+    if (last)
+      coef = coef[nrow(coef), ]
+    coef$ci.lower = coef$estimate - 1.96*coef$se
+    coef$ci.upper = coef$estimate + 1.96*coef$se
+    if (!is.null(summary(x)$family))
+    {
+      fam = summary(x)$family$family
+      if (summary(x)$family$link %in% c('log', 'logit'))
+      {
+        coef$estimate = exp(coef$estimate)
+        coef$ci.upper= exp(coef$ci.upper)
+        coef$ci.lower= exp(coef$ci.lower)
+      }
+    }
+    else
+      fam = 'Unknown'
+    
+    if (!last)
+      nm = paste(nm, rownames(coef))
+    out = data.frame(name = nm, method = fam, p = signif(coef$p, 3), estimate = coef$estimate, ci.lower = coef$ci.lower, ci.upper = coef$ci.upper, effect = paste(signif(coef$estimate, 3), ' [',  signif(coef$ci.lower,3),'-', signif(coef$ci.upper, 3), ']', sep = ''))
+  }
+  else if (class(x) == 'htest')
+  {
+    if (is.null(x$estimate))
+      x$estimate = x$statistic
+    if (is.null(x$conf.int))
+      x$conf.int = c(NA, NA)
+    out = data.table(name = nm, method = x$method, estimate = x$estimate, ci.lower = x$conf.int[1], ci.upper = x$conf.int[2], effect = paste(signif(x$estimate, 3), ' [',  signif(x$conf.int[1],3),'-', signif(x$conf.int[2], 3), ']', sep = ''), p = x$p.value)
+  }
+  else if (class(x) == 'polr')
+  {
+    coef = coef(summary(x)) %>% as.data.frame
+    nm = paste(nm, rownames(coef))
+    coef = as.data.table(coef)
+    setnames(coef, c('estimate', 'se', 't'))
+    out = data.table(name = nm) %>% cbind(coef)
+    out$p =  pnorm(abs(out$t), lower.tail = FALSE) * 2
+    out[, ci.lower := estimate-1.96*se]
+    out[, ci.upper := estimate+1.96*se]
+    out[, effect := paste(signif(estimate, 3), ' [',  signif(ci.lower,3),'-', signif(ci.upper, 3), ']', sep = '')]
+  }
+  else
+  {
+    out = data.frame(name = nm, method = x$method, p = signif(x$p.value, 3), estimate = x$estimate, ci.lower = x$conf.int[1], ci.upper = x$conf.int[2], effect = paste(signif(x$estimate, 3), ' [',  signif(x$conf.int[1],3),'-', signif(x$conf.int[2], 3), ']', sep = ''))
+  }
+  
+  out$effect = as.character(out$effect)
+  out$name = as.character(out$name)
+  out$method = as.character(out$method)
+  rownames(out) = NULL
+  return(as.data.table(out))
+}
+
+
+
+
+#' Find peaks in a \code{GRanges} over a given meta-data field
+#'
+#' Finds "peaks" in an input GRanges with value field y.
+#' first piles up ranges according to field score (default = 1 for each range)
+#' then finds peaks.  If peel > 0, then recursively peels segments
+#' contributing to top peak, and recomputes nextpeak "peel" times
+#' if peel>0, bootstrap controls whether to bootstrap peak interval nbootstrap times
+#' if id.field is not NULL will peel off with respect to unique (sample) id of segment and not purely according to width
+#' if FUN preovided then will complex aggregating function of piled up values in dijoint intervals prior to computing "coverage"
+#' (FUN must take in a single argument and return a scalar)
+#' if id.field is not NULL, AGG.FUN is a second fun to aggregate values from id.field to output interval
+#'
+#' @param gr \code{GRanges} with some meta-data field to find peaks on
+#' @param field character field specifying metadata to find peaks on, default "score, can be NULL in which case the count is computed
+#' @param minima logical flag whether to find minima or maxima
+#' @param id.field character denoting field whose values specifyx individual tracks (e.g. samples)
+#' @param bootstrap logical flag specifying whether to bootstrap "peel off" to statistically determine peak boundaries
+#' @param na.rm remove NA from data
+#' @param pbootstrap  quantile of bootstrap boundaries to include in the robust peak boundary estimate (i.e. essentially specifies confidence interval)
+#' @param nboostrap   number of bootstraps to run
+#' @param FUN  function to apply to compute score for a single individual
+#' @param AGG.FUN function to aggregate scores across individuals
+#' @export
+#' @examples
+#'
+#' ## outputs example gene rich hotspots from example_genes GRanges
+#' pk = gr.peaks(example_genes)
+#'
+#' ## now add a numeric quantity to example_genes and compute
+#' ## peaks with respect to a numeric scores, e.g. "exon_density"
+#' example_genes$exon_density = example_genes$exonCount / width(example_genes)
+#' pk = gr.peaks(example_genes, field = 'exon_density')
+#'
+#' ## can quickly find out what genes lie in the top peaks by agggregating back with
+#' ## original example_genes
+#' pk[1:10] %$% example_genes[, 'name']
+#'
+#'
+gr.peaks = function(gr, field = 'score',
+                    minima = FALSE,
+                    peel = 0,
+                    id.field = NULL,
+                    bootstrap = TRUE,
+                    na.rm = TRUE,
+                    pbootstrap = 0.95,
+                    nbootstrap = 1e4,
+                    FUN = NULL,
+                    AGG.FUN = sum,
+                    peel.gr = NULL, ## when peeling will use these segs instead of gr (which can just be a standard granges of scores)
+                    score.only = FALSE,
+                    verbose = peel>0)
+{
+  
+  if (!is(gr, 'GRanges'))
+    gr = seg2gr(gr)
+  
+  if (is.null(field))
+    field = 'score'
+  
+  if (!(field %in% names(values(gr))))
+    values(gr)[, field] = 1
+  
+  if (is.logical(values(gr)[, field]))
+    values(gr)[, field] = as.numeric(values(gr)[, field])
+  
+  if (peel>0 & !score.only)
+  {
+    if (verbose)
+      cat('Peeling\n')
+    out = GRanges()
+    
+    if (bootstrap)
+      pbootstrap = pmax(0, pmin(1, pmax(pbootstrap, 1-pbootstrap)))
+    
+    ## peel.gr are an over-ride if we have pre-computed the score and only want to match peaks to their supporting segments
+    if (is.null(peel.gr))
+      peel.gr = gr
+    
+    for (p in 1:peel)
+    {
+      if (verbose)
+        cat('Peel', p, '\n')
+      if (p == 1)
+        last = gr.peaks(gr, field, minima, peel = 0, FUN = FUN, AGG.FUN = AGG.FUN, id.field = id.field)
+      else
+      {
+        ## only need to recompute peak in region containing any in.peak intervals
+        in.peak = gr.in(gr, peak.hood)
+        
+        tmp = NULL
+        if (any(in.peak))
+          tmp = gr.peaks(gr[in.peak, ], field, minima, peel = 0, FUN = FUN, AGG.FUN = AGG.FUN, id.field = id.field)
+        last = grbind(last[!gr.in(last, peak.hood)], tmp)
+        names(values(last)) = field
+      }
+      
+      ## these are the regions with the maximum peak value
+      mix = which(values(last)[, field] == max(values(last)[, field]))
+      
+      ## there can be more than one peaks with the same value
+      ## and some are related since they are supported by the same gr
+      ## we group these peaks and define a tmp.peak to span all the peaks that are related
+      ## to the top peak
+      ## the peak is the span beteween the first and last interval with the maximum
+      ## peak value that are connected through at least one segment to the peak value
+      
+      ##
+      tmp.peak = last[mix]
+      
+      if (length(tmp.peak)>1)
+      {
+        tmp.peak.gr = gr[gr.in(gr, tmp.peak)]
+        ov = gr.findoverlaps(tmp.peak, tmp.peak.gr)
+        ed = rbind(ov$query.id, ov$subject.id+length(tmp.peak))[1:(length(ov)*2)]
+        cl = igraph::clusters(igraph::graph(ed), 'weak')$membership
+        tmp = tmp.peak[cl[1:length(tmp.peak)] %in% cl[1]]
+        peak = GRanges(seqnames(tmp)[1], IRanges(min(start(tmp)), max(end(tmp))))
+        values(peak)[, field] = values(tmp.peak)[, field][1]
+      }
+      else
+        peak = tmp.peak
+      ## tmp.peak is the interval spanning all the top values in this region
+      
+      in.peak1 =  gr.in(peel.gr, gr.start(peak))
+      in.peak2 = gr.in(peel.gr, gr.end(peak))
+      in.peak = in.peak1 | in.peak2
+      
+      ## peak.gr are the gr supporting the peak
+      peak.gr = peel.gr[in.peak1 & in.peak2] ## want to be more strict with segments used for peeling
+      peak.hood = reduce(peak.gr) ## actual peak will be a subset of this, and we can this in further iterations to limit peak revision
+      
+      in.peak = rep(FALSE, length(gr))
+      if (bootstrap && length(peak.gr))
+      {
+        ## asking across bootstrap smaples how does the intersection fluctuate
+        ## among segments contributing to the peak
+        
+        if (!is.null(id.field))
+        {
+          peak.gr = seg2gr(gr2dt(peak.gr)[, list(seqnames = seqnames[1], start = min(start),
+                                                 eval(parse(text = paste(field, '= sum(', field, '*(end-start))/sum(end-start)'))),end = max(end)),
+                                          by = eval(id.field)])
+          names(values(peak.gr))[ncol(values(peak.gr))] = field ## not sure why I need to do this line, should be done above
+        }
+        
+        B = matrix(sample(1:length(peak.gr), nbootstrap * length(peak.gr), prob = abs(values(peak.gr)[, field]), replace = TRUE), ncol = length(peak.gr))
+        ## bootstrap segment samples
+        ## the intersection is tha max start and min end among the segments in each
+        st = apply(matrix(start(peak.gr)[B], ncol = length(peak.gr)), 1, max)
+        en = apply(matrix(end(peak.gr)[B], ncol = length(peak.gr)), 1, min)
+        
+        ## take the left tail of the start position as the left peak boundary
+        start(peak) = quantile(st, (1-pbootstrap)/2)
+        
+        ## and the right tail of the end position as the right peak boundary
+        end(peak) = quantile(en, pbootstrap + (1-pbootstrap)/2)
+        
+        in.peak =  gr.in(gr, peak)
+      }
+      gr = gr[!in.peak]
+      peak$peeled = TRUE
+      out = c(out, peak)
+      if (length(gr)==0)
+        return(out)
+    }
+    last$peeled = FALSE
+    return(c(out, last[-mix]))
+  }
+  
+  if (na.rm)
+    if (any(na <- is.na(values(gr)[, field])))
+      gr = gr[!na]
+  
+  if (!is.null(FUN))
+  {
+    agr = GenomicRanges::disjoin(gr)
+    values(agr)[, field] = NA
+    tmp.mat = cbind(as.matrix(values(gr.val(agr[, c()], gr, field, weighted = FALSE, verbose = verbose, by = id.field, FUN = FUN, default.val = 0))))
+    values(agr)[, field] = apply(tmp.mat, 1, AGG.FUN)
+    gr = agr
+  }
+  
+  cov = as(GenomicRanges::coverage(gr, weight = values(gr)[, field]), 'GRanges')
+  
+  if (score.only)
+    return(cov)
+  
+  dcov = diff(cov$score)
+  dchrom = diff(as.integer(seqnames(cov)))
+  
+  if (minima)
+    peak.ix = (c(0, dcov) < 0 & c(0, dchrom)==0) & (c(dcov, 0) > 0 & c(dchrom, 0)==0)
+  else
+    peak.ix = (c(0, dcov) > 0 & c(0, dchrom)==0) & (c(dcov, 0) < 0 & c(dchrom, 0)==0)
+  
+  out = cov[which(peak.ix)]
+  
+  if (minima)
+    out = out[order(out$score)]
+  else
+    out = out[order(-out$score)]
+  
+  names(values(out))[1] = field
+  
+  return(out)
 }
 
 

@@ -1,13 +1,11 @@
 
 context("Unit testing chromunity operations")
 
-library(chromunity)
 library(GenomicRanges)
 library(testthat)
 library(pbmcapply)
 library(arrow)
 library(igraph)
-library(skitools)
 library(plyr)
 library(MASS)
 library(devtools)
@@ -40,7 +38,6 @@ test_that("re_chromunity", {
     this.chrom = re_chromunity(concatemers = example_gr, resolution = 1e5, window.size = 5e6, mc.cores = 2)
     expect_identical(class(this.chrom)[1], "Chromunity")
 })
-
 
 test_that("annotate", {
     example_chrom = readRDS(chromunity_out.path)
