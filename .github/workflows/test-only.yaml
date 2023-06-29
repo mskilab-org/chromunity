@@ -15,7 +15,7 @@ jobs:
     strategy:
       matrix:
         R:
-          - '4.3.2'
+          - '4.0.2'
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
 
