@@ -1,0 +1,56 @@
+on:
+  push:
+    branches:
+      - jameson_alpha
+  pull_request:
+    branches:
+      - jameson_alpha
+  workflow_dispatch:
+
+name: test-only
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        R:
+          - '4.3.2'
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+          r-version: ${{ matrix.R }}
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglpk-dev
+
+      - name: Install specific versions of dependencies
+        run: |
+          Rscript -e "if (!requireNamespace('remotes', quietly = TRUE)) install.packages('remotes')"
+          Rscript -e "remotes::install_version('igraph', version = '1.3.0', upgrade = 'never')"
+
+      - name: Install dependencies from GitHub
+        run: |
+          Rscript -e "if (!requireNamespace('remotes', quietly = TRUE)) install.packages('remotes')"
+          Rscript -e "remotes::install_github('mskilab-org/gUtils')"
+          Rscript -e "devtools::install_github('mskilab-org/gChain')"
+          Rscript -e "BiocManager::install('GenomicRanges')"
+          Rscript -e "devtools::install_version('devtools')"
+          Rscript -e "devtools::install_version('BiocManager')"
+          Rscript -e "BiocManager::install('BSgenome.Hsapiens.UCSC.hg38')"
+
+      - name: Run tests
+        run: |
+          R CMD build .
+          R CMD check *.tar.gz --no-manual
+        shell: bash
