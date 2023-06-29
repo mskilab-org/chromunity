@@ -9,6 +9,7 @@ Depends: R (>= 3.5.0),
     data.table (>= 1.10)
 Imports: 
     gUtils,
+    gChain,
     Matrix,
     igraph,
     magrittr,
@@ -22,6 +23,9 @@ Imports:
     arrow,
     stats,
     MASS
+Remotes:
+    github::mskilab-org/gUtils,
+    github::mskilab-org/gChain
 Suggests:
     testthat
 License: GPL-3
