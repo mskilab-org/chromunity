@@ -41,6 +41,7 @@ jobs:
       - name: Install dependencies from GitHub
         run: |
           Rscript -e "if (!requireNamespace('remotes', quietly = TRUE)) install.packages('remotes')"
+          Rscript -e "devtools::install_version('devtools')"
           Rscript -e "remotes::install_github('mskilab-org/gUtils')"
           Rscript -e "devtools::install_github('mskilab-org/gChain')"
           Rscript -e "BiocManager::install('GenomicRanges')"
