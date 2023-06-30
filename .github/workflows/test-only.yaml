@@ -44,8 +44,6 @@ jobs:
           Rscript -e "remotes::install_version('R6', upgrade = 'never')"
           Rscript -e "remotes::install_version('plyr', upgrade = 'never')"
           Rscript -e "remotes::install_version('arrow', upgrade = 'never')"
-          Rscript -e "remotes::install_version('stats', upgrade = 'never')"
-          Rscript -e "remotes::install_version('MASS', upgrade = 'never')"
           
       - name: Install Bioconductor packages
         run: |
