@@ -32,26 +32,32 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libglpk-dev
-
-      - name: Install dependencies from GitHub
+          
+      - name: Install remote dependencies
         run: |
           Rscript -e "if (!requireNamespace('remotes', quietly = TRUE)) install.packages('remotes')"
-          Rscript -e "remotes::install_github('mskilab-org/gUtils', upgrade = 'never')"
-          Rscript -e "remotes::install_github('mskilab-org/gChain', upgrade = 'never')"
           Rscript -e "remotes::install_version('Matrix', upgrade = 'never')"
           Rscript -e "remotes::install_version('igraph', version = '1.3.0', upgrade = 'never')"
           Rscript -e "remotes::install_version('magrittr', upgrade = 'never')"
           Rscript -e "remotes::install_version('pbmcapply', upgrade = 'never')"
-          Rscript -e "remotes::install_version('GenomicRanges', upgrade = 'never')"
-          Rscript -e "if (!requireNamespace('BiocManager', quietly = TRUE)) install.packages('BiocManager')"
-          Rscript -e "BiocManager::install('BSgenome.Hsapiens.UCSC.hg38', version = '3.12', ask = FALSE)"
           Rscript -e "remotes::install_version('zoo', upgrade = 'never')"
           Rscript -e "remotes::install_version('R6', upgrade = 'never')"
           Rscript -e "remotes::install_version('plyr', upgrade = 'never')"
           Rscript -e "remotes::install_version('arrow', upgrade = 'never')"
           Rscript -e "remotes::install_version('stats', upgrade = 'never')"
           Rscript -e "remotes::install_version('MASS', upgrade = 'never')"
+          
+      - name: Install Bioconductor packages
+        run: |
+          Rscript -e "if (!requireNamespace('BiocManager', quietly = TRUE)) install.packages('BiocManager')"
+          Rscript -e "BiocManager::install('BSgenome.Hsapiens.UCSC.hg38', version = '3.12', ask = FALSE)"
+          Rscript -e "BiocManager::install('GenomicRanges', version = '3.12')"
 
+      - name: Install dependencies from GitHub
+        run: |
+          Rscript -e "remotes::install_github('mskilab-org/gUtils', upgrade = 'never')"
+          Rscript -e "remotes::install_github('mskilab-org/gChain', upgrade = 'never')"
+          
       - name: Run tests
         run: |
           R CMD build .
