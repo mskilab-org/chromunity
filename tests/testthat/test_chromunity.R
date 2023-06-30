@@ -8,7 +8,6 @@ library(arrow)
 library(igraph)
 library(plyr)
 library(MASS)
-library(devtools)
 
 example_gr.path = system.file("extdata", "example_gr.rds", package = 'chromunity')
 window_gr.path = system.file("extdata", "window_gr.rds", package = 'chromunity')
