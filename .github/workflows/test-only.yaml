@@ -11,11 +11,11 @@ name: test-only
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     strategy:
       matrix:
         R:
-          - '4.0.2'
+          - '4.3.1'
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
 
@@ -30,10 +30,10 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libglpk-dev
-          sudo apt-get install -y libharfbuzz-dev libfribidi-dev
-          
+          brew install glpk
+          brew install harfbuzz
+          brew install fribidi
+
       - name: Install remote dependencies
         run: |
           Rscript -e "if (!requireNamespace('remotes', quietly = TRUE)) install.packages('remotes')"
@@ -49,7 +49,7 @@ jobs:
           Rscript -e "remotes::install_version('R6', upgrade = 'never')"
           Rscript -e "remotes::install_version('plyr', upgrade = 'never')"
           Rscript -e "remotes::install_version('arrow', upgrade = 'never')"
-          
+
       - name: Install Bioconductor packages
         run: |
           Rscript -e "if (!requireNamespace('BiocManager', quietly = TRUE)) install.packages('BiocManager')"
@@ -60,7 +60,7 @@ jobs:
         run: |
           Rscript -e "remotes::install_github('mskilab-org/gUtils', upgrade = 'never')"
           Rscript -e "remotes::install_github('mskilab-org/gChain', upgrade = 'never')"
-          
+
       - name: Run tests
         run: |
           R CMD build .
