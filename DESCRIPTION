@@ -1,7 +1,7 @@
 Package: chromunity
 Title: Discovery of communities in Pore-C concatemers
 Version: 0.0.1
-Authors@R: c(person("Aditya", "Deshpande", role = c("aut", "cre"), email = "asd3002@med.cornell.edu"),
+Authors@R: c(person("Aditya", "Deshpande", role = c("aut"), email = "asd3002@med.cornell.edu"),
 	person("Marcin", "Imielinski", role = c("aut"), email = "mai9037@med.cornell.edu"),
 	person("Jameson", "Orvis", role = c("cre"), email = "jorvis@nygenome.org"))
 Description: Discovery of communities in Pore-C concatemers.
