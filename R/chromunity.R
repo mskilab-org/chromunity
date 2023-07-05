@@ -2742,21 +2742,6 @@ dflm = function(x, last = FALSE, nm = '')
 #' @param nboostrap   number of bootstraps to run
 #' @param FUN  function to apply to compute score for a single individual
 #' @param AGG.FUN function to aggregate scores across individuals
-#' @examples
-#'
-#' ## outputs example gene rich hotspots from example_genes GRanges
-#' pk = gr.peaks(example_genes)
-#'
-#' ## now add a numeric quantity to example_genes and compute
-#' ## peaks with respect to a numeric scores, e.g. "exon_density"
-#' example_genes$exon_density = example_genes$exonCount / width(example_genes)
-#' pk = gr.peaks(example_genes, field = 'exon_density')
-#'
-#' ## can quickly find out what genes lie in the top peaks by agggregating back with
-#' ## original example_genes
-#' pk[1:10] %$% example_genes[, 'name']
-#'
-#'
 gr.peaks = function(gr, field = 'score',
                     minima = FALSE,
                     peel = 0,
