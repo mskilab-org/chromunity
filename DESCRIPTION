@@ -1,32 +1,37 @@
 Package: chromunity
 Title: Discovery of communities in Pore-C concatemers
-Version: 0.0.1
-Authors@R: c(person("Aditya", "Deshpande", role = c("aut", "cre"), email = "asd3002@med.cornell.edu"),
-	person("Marcin", "Imielinski", role = c("aut"), email = "mai9037@med.cornell.edu"))
+Version: 0.0.2
+Authors@R: c(person("Aditya", "Deshpande", role = c("aut"), email = "asd3002@med.cornell.edu"),
+	person("Marcin", "Imielinski", role = c("aut"), email = "mai9037@med.cornell.edu"),
+	person("Jameson", "Orvis", role = c("cre"), email = "jorvis@nygenome.org"))
 Description: Discovery of communities in Pore-C concatemers.
 biocViews:
 Depends: R (>= 3.5.0), 
     data.table (>= 1.10)
 Imports: 
     gUtils,
+    gChain,
     Matrix,
     igraph,
     magrittr,
     pbmcapply,
+    parallel,
     GenomicRanges,
     BiocGenerics,
+    BSgenome.Hsapiens.UCSC.hg38,
     zoo,
-    skitools,
-    gChain,
     R6,
     plyr,
     arrow,
     stats,
     MASS
+Remotes:
+    github::mskilab-org/gUtils,
+    github::mskilab-org/gChain
 Suggests:
     testthat
 License: GPL-3
 BugReports: http://github.com/mskilab/chromunity/issues
 Encoding: UTF-8
 LazyData: true
-RoxygenNote: 7.1.2
+RoxygenNote: 7.2.1

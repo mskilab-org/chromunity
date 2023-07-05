@@ -11,6 +11,7 @@
 #' @import zoo
 #' @import arrow
 #' @importFrom pbmcapply pbmclapply 
+#' @importFrom parallel mclapply
 #' @importFrom stats median
 #' @importFrom stats na.omit
 #' @importFrom MASS ginv
@@ -86,10 +87,74 @@ parquet2gr = function(path = NULL, col_names = NULL, save_path = NULL, prefix = 
 }
 
 
+
+#' @name csv2gr
+#' @description
+#' Converts csv format loaded to GEO to a single gRanges object
+#'
+#' @param path string Path to a directory containing all csv files to be read in.
+#' @param col_names vector Column names from csv files to read in.
+#' @param save_path string Path to save the gRanges to.
+#' @param prefix string File prefix
+#' @param mc.cores integer Number of cores in mclapply (default = 5)
+#' @param verbose boolean "verbose" flag (default = FALSE)
+#' @return GRanges format of the csv files combined
+#' @author Aditya Deshpande, Marcin Imielinski
+#' 
+#' @export
+csv2gr = function(path = NULL, col_names = NULL, save_path = NULL, prefix = "NlaIII_this_sample", mc.cores = 5, verbose = TRUE){
+
+    if(is.null(path)){
+        stop("Need a valid path to all Pore-C csvs.")
+    }
+
+    all.paths = data.table(file_path = dir(path, all.files = TRUE, recursive = TRUE, full = TRUE))[grepl("*fragment_alignments.csv.gz*", file_path)]
+
+    if(nrow(all.paths) == 0){
+        stop("No valid files files with suffix pore_c.csv found.")
+    } 
+
+    if(verbose){"Beginning to read csv files"}
+
+    if(is.null(col_names)){col_names = c("read_name", "chrom", "start", "end", "pass_filter")}
+    
+    csv.list = pbmclapply(1:nrow(all.paths), function(k){
+        csv.al = fread(all.paths[k]$file_path)[, .(read_name, chrom, start, end, pass_filter)]
+        csv.al = as.data.table(csv.al)
+        csv.al = csv.al[pass_filter ==  TRUE]  
+        return(csv.al)
+    }, mc.cores = mc.cores)
+
+    csv.dt = rbindlist(csv.list, fill = TRUE)
+
+    gc()
+    
+    csv.dt[, read_idx := .GRP, by = read_name]
+    uni.dt = unique(csv.dt[, .(read_name, read_idx)])
+    uni.dt[, fr.read_name := .N, by = read_name]
+    uni.dt[, fr.read_idx := .N, by = read_idx]
+    if (!any(uni.dt$fr.read_name > 1)){
+        if(!any(uni.dt$fr.read_idx > 1)){
+            rm(uni.dt)
+        } else {
+            message("Duplicate read_idx found, check this field in the output")
+        }
+    } else {
+        message("Duplicate read_name found, make all files belong to a single, unique sample")
+    }
+
+    csv.gr = dt2gr(csv.dt)
+
+    if (!is.null(save_path)){
+        saveRDS(csv.gr, paste0(save_path, "/", prefix, ".rds"))
+    }
+    return(csv.gr)
+}
+
     
 
 
-#' @name background
+#' @name re_background
 #' @description
 #' Given n binsets generates random "background" binsets that mirrors the input binset characteristics with respect to chromosome, width, and distance.
 #'
@@ -109,8 +174,9 @@ parquet2gr = function(path = NULL, col_names = NULL, save_path = NULL, prefix = 
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
 
-background = function(binsets, n = length(binsets), pseudocount = 1, resolution = 5e4, gg=NULL, interchromosomal.dist = 1e8, interchromosomal.table = NULL, verbose = TRUE, mc.cores = 5)
+re_background = function(binsets, n = length(binsets), pseudocount = 1, resolution = 5e4, gg=NULL, interchromosomal.dist = 1e8, interchromosomal.table = NULL, verbose = TRUE, mc.cores = 5, seed=42)
 {
+  set.seed(seed)
   if (!length(binsets))
     stop('empty binsets')
 
@@ -302,6 +368,86 @@ rdens = function(n, values, width = NULL, kernel="gaussian") {
 
 
 
+#' @name rdens_sliding
+#' @description
+#'
+#' Function to sample kernel density from a distribution adapted from
+#' https://stats.stackexchange.com/questions/321542/how-can-i-draw-a-value-randomly-from-a-kernel-density-estimate
+#' for sliding_window implementation
+#' 
+#' @param n integer number of samples
+#' @param den vector data to be used for building the kernel
+#' @param dat integer kernel width
+#' @param kernel string kernel type, use Gaussian
+#' @return data.able with values drawn from the kernel
+
+
+rdens_sliding = function(n, den, dat, kernel="gaussian") {
+    width <- den$bw                              # Kernel width
+    rkernel <- function(n) rnorm(n, sd=width)  # Kernel sampler
+    ret = data.table(value = sample(dat, n, replace=TRUE) + rkernel(n))
+    ret[, value := ifelse(value < 0, value*-1, value)]
+    return(ret$value)
+}
+
+
+
+#' @name .chr2str
+#' @description
+#'
+#' Internal function to convert chromosome string to int
+#' 
+#' @param chr_str chromosome string
+#' @return int chr
+
+
+.chr2str = function(chr_str){
+    chr.int.ch = gsub("chr", "", chr_str)
+    if (any(chr.int.ch == "X")){
+        chr.int.ch[which(chr.int.ch == "X")] = 23
+    } else if (any(chr.int.ch == "Y")){
+        chr.int.ch[which(chr.int.ch == "Y")] = 24
+    }
+        chr.int = as.integer(chr.int.ch)
+    return(chr.int)
+}
+
+
+#' @name extract_dw
+#' @description
+#'
+#' Internal function to extract covariates
+#' 
+#' @param chromunity.outbinsets from chromunity algorithms
+#' @return data.table with covariates
+
+
+
+extract_dw = function(chromunity.out, num.cores = 10){
+####
+    unique.chrom = as.character(unique(chromunity.out$bid))
+    message("Generating distributions")
+    list.dw.vec = pbmclapply(1:length(unique.chrom), function(i){
+        this.uc = unique.chrom[i]
+        this.chrom = chromunity.out %Q% (bid == this.uc)
+#####
+        ## modified for immidiate dists
+        dist.vec = as.data.table(gr.dist(this.chrom)[lower.tri(gr.dist(this.chrom))])[, type := "dist"]
+        width.vec = as.data.table(width(this.chrom))[, type := "width"]
+        this.card = as.data.table(length(this.chrom))[, type := "cardinality"]
+        all.vec = rbind(dist.vec, width.vec, this.card)
+        all.vec[, bid := this.uc]
+        if (this.card$V1 > 2){
+            return(all.vec)
+        }
+        }, mc.cores = num.cores)
+    all.dt = rbindlist(list.dw.vec, fill = T)
+    return(all.dt)
+}
+
+
+
+
 #' @name annotate
 #' @description
 #'
@@ -316,12 +462,14 @@ rdens = function(n, values, width = NULL, kernel="gaussian") {
 #' @param interchromosomal.dist numeric scalar of "effective" distance for inter chromosomal bins [1e8]
 #' @param verbose logical flag
 #' @param mc.cores integer how many cores to parallelize
+#' @param threads used to set number of data table threads to use with setDTthreads function, segfaults may occur if >1
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
 #' @return data.table of sub-binsets i.e. k-power set of binsets annotated with $count field representing covariates, ready for fitting, **one row per binset
 
-annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromosomal.dist = 1e8, interchromosomal.table = NULL, gg = NULL, mc.cores = 5, numchunks = 200*mc.cores-1, seed = 42, verbose = TRUE, unique.per.setid = TRUE, resolution = 5e4)
+annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromosomal.dist = 1e8, interchromosomal.table = NULL, gg = NULL, mc.cores = 5, numchunks = 200*mc.cores-1, seed = 42, verbose = TRUE, unique.per.setid = TRUE, resolution = 5e4, threads = 1)
 {
+  setDTthreads(threads)
   set.seed(seed)
   if (!inherits(binsets, 'GRanges'))
     binsets = dt2gr(binsets)
@@ -335,6 +483,7 @@ annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromos
   #####
   ## bin vs concatemer overlaps
   if (verbose) smessage('Overlapping ', length(binsets), ' bins with ', length(concatemers), ' monomers')
+
   ov = binsets %*% concatemers[, 'cid'] %>% as.data.table
   ##
   if (verbose) smessage('Computing bin by bin pairwise distance')
@@ -464,7 +613,7 @@ annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromos
       this.dists = this.sub.binsets[, bindist[as.data.table(expand.grid(i = binid, j = binid))[i<j, ], .(dist = c('min.dist',  'max.dist'), value = quantile(distance+1,  c(0, 1)))], by = .(setid, bid)] %>% dcast(bid + setid ~ dist, value.var = 'value')
       })  %>% rbindlist
 
-  
+
   if (verbose) smessage('Computing marginal sum per bid')
   margs = counts[, .(sum.counts = sum(count)), by = .(bid)]
 
@@ -563,15 +712,16 @@ powerset = function(set, min.k = 1, max.k = 5)
 #' @return fitted model that can be applied to new cases
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
-fit = function(annotated.binsets, nb = TRUE, return.model = TRUE, verbose = TRUE, maxit = 50)
+fit = function(annotated.binsets, nb = TRUE, return.model = TRUE, verbose = TRUE, maxit = 50, seed = 42)
 {
+  set.seed(seed)
   if (!nb) stop('not yet supported')
   ## added sumcounts as cov and width as only offset
   covariates = setdiff(names(annotated.binsets), c('bid', 'setid', 'mean.dist', 'count'))
   fmstring = paste('count ~', paste(paste0('log(', covariates, ')', collapse = ' + ')))
   ## fmstring = paste0(fmstring, " + ", "offset(log(width))")
   fm = formula(fmstring)
-##
+  ##
   model = tryCatch(glm.nb(formula = fm, data = annotated.binsets, control = glm.control(maxit = maxit)), error = function(e) NULL)
 
   return(list(model = model, covariates = covariates))
@@ -634,14 +784,12 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
     {
       binsets = muffle(dt2gr(binsets))
       if (is.null(binsets))
-        stop('binsets failed conversion to GRanges, please provide valid GRnges')
+        stop('binsets failed conversion to GRanges, please provide valid GRanges')
     }
 
   if (is.null(background.binsets) & is.null(model))
   {
-    if (verbose) smessage('Computing random background binsets using features of provided binsets')
-    background.binsets = background(binsets, n = 1500, mc.cores = mc.cores, resolution = resolution)
-    background.binsets = background.binsets[!bid %in% background.binsets[width < resolution]$bid]
+    stop('Please provide valid background binsets and model')
   }
   
   if (is.null(model))
@@ -671,7 +819,7 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
 }
 
 
-#' @name chromunity
+#' @name re_chromunity
 #' @description
 #'
 #' Runs genome-wide chromunity detection across a sliding or provided genomic window
@@ -680,7 +828,6 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
 #' @param resolution bin size for community detection [5e4]
 #' @param region region to run on [si2gr(concatemers)]
 #' @param windows GRanges or GRangesList of windows to test, more appropriate for testing specific windows, e.g. targets such as promoters/enhancers windows. If sliding window approach is desired, keep this parameter as NULL and use piecewise argument.
-#' @param piecewise logical flag specifying whether to run one window at a time ie to cluster concatemers that (partially overlap) that window, note: this may
 #' @param shave  logical flag specifying whether to iteratively "shave" concatemers and bins to a subset C and B where every bin in B has at leat bthresh concatemer support across C and every concatemer in C has order / cardinality of at least cthresh across B, this is done by iteratively removing bins and concatemers until you reach a fixed point
 #' @param window.size window size to do community detection within
 #' @param max.size max size of problem (concatemers x bins) to consider (default is 2^31-1).  If we hit this problem size, will subsample concatemers so that concatemers * bins is < max.dim, this step is done downstream of shaving 
@@ -692,8 +839,9 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
 
-chromunity = function(concatemers, resolution = 5e4, region = si2gr(concatemers), windows = NULL, piecewise = TRUE, shave = FALSE, bthresh = 3, cthresh = 3, max.size = 2^31-1, subsample.frac = NULL, window.size = 2e6, max.slice = 1e6, min.support = 5, stride = window.size/2, mc.cores = 5, k.knn = 25, k.min = 5, pad = 1e3, peak.thresh = 0.85, seed = 42, verbose = TRUE)
+re_chromunity = function(concatemers, resolution = 5e4, region = si2gr(concatemers), windows = NULL, piecewise = TRUE, shave = FALSE, bthresh = 3, cthresh = 3, max.size = 2^31-1, subsample.frac = NULL, window.size = 2e6, max.slice = 1e6, min.support = 5, stride = window.size/2, mc.cores = 5, k.knn = 25, k.min = 5, pad = 1e3, peak.thresh = 0.85, seed = 42, verbose = TRUE)
 {
+  set.seed(seed)
   if (is.null(windows))
       windows = gr.start(gr.tile(region, stride))+window.size/2
       windows = dt2gr(gr2dt(windows)[, start := ifelse(start < 0, 1, start)])
@@ -734,50 +882,25 @@ chromunity = function(concatemers, resolution = 5e4, region = si2gr(concatemers)
   ## cycle through (possibly complex) windows call cluster_concatemers and convert to gr.sums
   ## winids = unique(binmap$winid)
   winids = unique(binmap[binid %in% unique(concatemers$binid)]$winid)
-  
-  if (verbose) cmessage('Starting concatemer community detection across ', length(winids), ' windows')
 
-  if (piecewise)
-    {
-        ##cc = pbmclapply(winids, mc.cores = mc.cores, mc.preschedule = TRUE, function(win)
-        cc = mclapply(winids, mc.cores = mc.cores, mc.preschedule = TRUE, function(win)
-        {
-            ## print(win)
-            suppressWarnings({
-                these.bins = binmap[.(win), ]
-                cc = concatemer_communities(concatemers %Q% (binid %in% these.bins$binid), k.knn = k.knn, max.size = max.size, k.min = k.min, seed = seed, verbose = verbose>1)
-                if (length(cc))
-                {
-                    cc = cc[cc$support >= min.support] 
-                    cc$winid = win
-                }
-            })
-            cc
-        })
-        
-        cc = cc %>% do.call(grbind, .)
-        cc = dt2gr(gr2dt(cc)[, chid := .GRP, by = .(chid, winid)])
-    }
-  else ## we shave 
-  {
-    if (shave)
+  if (shave)
     {
       if (verbose)
         cmessage('Shaving concatemers with bthresh = ', bthresh, ' and cthresh = ', cthresh)
-      concatemers = shave_concatemers(concatemers, bthresh = bthresh, cthresh = cthresh, verbose = verbose)
+      concatemers = shave_concatemers(concatemers, bthresh = bthresh, cthresh = cthresh, verbose = verbose) 
     }
 
     ncat = concatemers$cid %>% unique %>% length
     nbin = concatemers$binid %>% unique %>% length
 
-    if (verbose)
+
+  if (verbose)
       cmessage(sprintf('Running concatemer communities with %s concatemers and %s bins', ncat, nbin))
-    
+  
     cc = concatemer_communities(concatemers, k.knn = k.knn, k.min = k.min, seed = seed, max.size = max.size, verbose = verbose, subsample.frac = subsample.frac)
 
     if (length(cc))
       cc = cc %Q% (support>=min.support)
-  }
       
   if (!length(cc))
     return(Chromunity(concatemers = GRanges(), binsets = GRanges(), meta = params))
@@ -819,9 +942,10 @@ chromunity = function(concatemers, resolution = 5e4, region = si2gr(concatemers)
 #' @param cthresh integer minimum concatemer order across binset B
 #' @param bthresh integer minimum bin support across set C of concatemers
 #' @param verbose logical flag whether to print diff statements cmessages for each step of iteration
-shave_concatemers = function(concatemers, cthresh = 3, bthresh = 2, verbose = TRUE)
+#' @param threads used to set number of data table threads to use with setDTthreads function, segfaults may occur if >1
+shave_concatemers = function(concatemers, cthresh = 3, bthresh = 2, verbose = TRUE, threads = 1)
 {
-  
+  setDTthreads(threads)
   .shave = function(concatemers, bthresh = 2, cthresh = 2)
   {
     dt = unique(gr2dt(concatemers), by = c('cid', 'binid'))
@@ -829,7 +953,7 @@ shave_concatemers = function(concatemers, cthresh = 3, bthresh = 2, verbose = TR
     bcount = dt[, .N, by = binid]
     coolc = ccount[N>=bthresh, cid]
     coolb = bcount[N>=cthresh, binid]
-    concatemers %Q% (cid %in% coolc) %Q% (binid %in% coolb)
+    concatemers %Q% (cid %in% coolc) %Q% (binid %in% coolb) 
   }
   old = concatemers
   new = .shave(concatemers, bthresh = bthresh, cthresh = cthresh)
@@ -842,8 +966,6 @@ shave_concatemers = function(concatemers, cthresh = 3, bthresh = 2, verbose = TR
   }
   new
 }
-
-
 
 
 #' @name concatemer_communities
@@ -860,11 +982,13 @@ shave_concatemers = function(concatemers, cthresh = 3, bthresh = 2, verbose = TR
 #' @param small integer threshold for bases that define small concatemers, only relevant if drop.small = TRUE
 #' @param subsample.frac optional arg specifying fraction of concatemers to subsample [NULL]
 #' @param seed seed for subsampling
+#' @param threads used to set number of data table threads to use with setDTthreads function, segfaults may occur if >1
 #' @return GRanges of concatemers labeled by $c mmunity which specifies community id
 concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
     drop.small = FALSE, small = 1e4, max.size = 2^31-1,
-    subsample.frac = NULL, seed = 42, verbose = TRUE, debug = FALSE)  
+    subsample.frac = NULL, seed = 42, verbose = TRUE, debug = FALSE, threads = 1)  
 {
+  setDTthreads(threads) #horrible segfaults occur if you don't include this
   reads = concatemers
 
   if (is.null(reads$cid))
@@ -1001,6 +1125,316 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
   return(reads)
 }
 
+
+
+##############
+
+#' @name sliding_window_chromunity
+#' @description
+#'
+#' Runs genome-wide chromunity detection across a sliding or provided genomic window
+#'
+#' @param concatemers GRanges with $cid
+#' @param resolution bin size for community detection [5e4]
+#' @param region region to run on [si2gr(concatemers)]
+#' @param windows GRanges or GRangesList of windows to test, more appropriate for testing specific windows, e.g. targets such as promoters/enhancers windows. If sliding window approach is desired, keep this parameter as NULL and use piecewise argument.
+#' @param window.size window size to do community detection within
+#' @param max.size max size of problem (concatemers x bins) to consider (default is 2^31-1).  If we hit this problem size, will subsample concatemers so that concatemers * bins is < max.dim, this step is done downstream of shaving 
+#' @param k.knn KNN parameter specifying how many nearest neighbors to sample when building KNN graph
+#' @param peak.thresh peak threshold with which to call a peak
+#' @param k.min minimal number of nearest neighbors an edge in KNN graph needs to have before community detection
+#' @param pad integer pad to use when computing the footprint of each chromunity and finding peak regions which become binsets
+#' @param take_sub_sample take subsample to be used for training
+#' @param subsample.frac proprtion of concatemers to subsample
+#' @return list with items $binset,  $support, $params: $binsets is GRanges of bins with field $bid corresponding to binset id and $support which is the concatemer community supporting the binset which are GRanges with $bid
+#' @author Aditya Deshpande, Marcin Imielinski
+#' @export
+
+sliding_window_chromunity = function(concatemers, resolution = 5e4, region = si2gr(concatemers), windows = NULL, chr = NULL, take_sub_sample = TRUE, subsample.frac = 0.5, window.size = 2e6, max.slice = 1e6, min.support = 3, stride = window.size/2, mc.cores = 5, k.knn = 25, k.min = 5, pad = 1e3, peak.thresh = 0.85, seed = 145, verbose = TRUE, genome = "BSgenome.Hsapiens.UCSC.hg38::Hsapiens")
+{
+    
+  set.seed(seed)
+    
+  if (is.null(chr)){
+      stop("Provide chr as this is sliding window implementation")
+  }
+    
+  if (is.null(windows))
+    windows = gr.tile(hg_seqlengths(genome = genome), window.size/2)+window.size/4
+    windows = dt2gr(gr2dt(windows)[, start := ifelse(start < 0, 1, start)])
+    windows = windows %Q% (seqnames == chr)
+    windows = sortSeqlevels(windows)
+    windows = sort(windows)
+   
+  if (is.null(concatemers$cid))
+  {
+      if ('read_idx' %in% names(values(concatemers)))
+        names(values(concatemers))[match('read_idx', names(values(concatemers)))] = 'cid'
+      else
+        stop("concatemer GRanges must have metadata column $cid or $read_idx specifying the concatemer id")
+  }
+  
+  params = data.table(k.knn = k.knn, k.min = k.min, seed = seed)
+
+  if (!is.null(resolution)){
+      bins = gr.tile(hg_seqlengths(genome = genome), resolution)
+      #bins = bins %Q% (seqnames == chr) 
+      #bins = gr.tile(region, resolution)
+  } else {
+      bins = windows %>% unlist %>% gr.stripstrand %>% disjoin
+  }
+
+  if (verbose) cmessage('Generated ', length(bins), ' bins across ', length(windows), ' windows')
+
+  ## (batch) match up concatemers with binids
+  concatemers$binid = gr.match(concatemers, bins, max.slice = max.slice, mc.cores =  mc.cores, verbose = verbose)
+
+  ## maybe NA need to be removed
+  concatemers = concatemers %Q% (!is.na(binid))
+
+  if (!is.null(subsample.frac)){
+      take_sub_sample = TRUE
+      if (verbose) cmessage('Taking sub-sample with fraction ', subsample.frac)
+  }
+
+    chrom.comm = mclapply(1:length(windows), mc.cores = mc.cores, function(j){
+        suppressWarnings({
+            which.gr = windows[j]
+            these.cids = (concatemers %&% which.gr)$cid
+            this.pc.gr =  concatemers %Q% (cid %in% these.cids)
+            this.bins = bins %&&% which.gr
+            this.chromunity.out = tryCatch(gr2dt(concatemer_chromunity_sliding(this.pc.gr,
+                                                                               k.knn = k.knn,
+                                                                               k.min = k.min,
+                                                                               tiles = this.bins,
+                                                                               take_sub_sample = take_sub_sample,
+                                                                               frac = subsample.frac,
+                                                                               verbose = FALSE)), error = function(e) NULL)  
+            if (!is.null(this.chromunity.out)){
+                this.chromunity.out[, winid := j]
+            } else {
+                this.chromunity.out = data.table(NA)
+            }
+        })
+        return(this.chromunity.out)
+    })
+    chrom.comm = rbindlist(chrom.comm, fill = T)
+
+    chrom.comm[, tix := ifelse(is.na(tix), 0, tix)]
+    chrom.comm[, V1 := NULL]
+    chrom.comm = na.omit(chrom.comm)
+    chrom.comm[, chid := .GRP, by = .(chid, winid)]
+    chrom.comm.filt = chrom.comm[support >= min.support]
+    chrom.comm.filt = dt2gr(chrom.comm.filt)
+      
+  if (!length(chrom.comm.filt))
+    return(Chromunity(concatemers = GRanges(), binsets = GRanges(), meta = params))
+
+  uchid = unique((chrom.comm.filt %Q% (support >= min.support))$chid)
+
+  if (verbose) cmessage('Analyzing gr.sums associated with ', length(uchid), ' concatemer communities to generate binsets')
+
+  binsets = mclapply(uchid, mc.cores = mc.cores, function(this.chid)
+  {
+    suppressWarnings({
+      this.chrom.comm = chrom.comm.filt %Q% (chid == this.chid)
+      winid = unique(this.chrom.comm$winid)
+      peaks = gr.sum(this.chrom.comm + pad) 
+      binset = bins[, c()] %&% (peaks[peaks$score > quantile(peaks$score, peak.thresh)])
+      binset = binset %&% windows[winid]
+      if (length(binset))
+      {
+        binset$chid = this.chid
+        binset$bid = this.chid
+        binset$winid = winid
+        binset = gr.reduce(binset)
+      }
+    })
+    binset
+  })  %>% do.call(grbind, .)
+
+  chrom.comm = dt2gr(chrom.comm)
+  
+  return(Chromunity(concatemers = chrom.comm, binsets = binsets, meta = params))
+}
+
+
+
+#' @name concatemer_chromunity_sliding
+#' @description
+#'
+#' Low level function that labels concatemers with chromunity ids $chid using community detection on a graph. A faster implementation  for sliding window 
+#'
+#' Given a GRanges of monomers labeled by concatemer id $cid
+#'
+#' @param concatemers GRanges of monomers with field $cid indicating concatemer id and $binid represent bin id
+#' @param tiles.k.knn KNN parameter specifying how many nearest neighbors to sample when building KNN graph
+#' @param k.min minimal number of nearest neighbors an edge in KNN graph needs to have before community detection
+#' @param drop.small logical flag specifying whether to remove "small" concatemers ie those with a footprint <= small argument [FALSE]
+#' @param small integer threshold for bases that define small concatemers, only relevant if drop.small = TRUE
+#' @param take_sub_sample optional arg specifying if fraction of concatemers to subsample [FALSE]  
+#' @param subsample.frac optional arg specifying fraction of concatemers to subsample [0.5]
+#' @param seed seed for subsampling
+#' @param threads used to set number of data table threads to use with setDTthreads function, segfaults may occur if >1
+#' @return GRanges of concatemers labeled by $c mmunity which specifies community id
+
+concatemer_chromunity_sliding <- function (concatemers, k.knn = 10, k.min = 1, tiles,  
+    drop.small = FALSE, small = NULL, 
+    take_sub_sample = FALSE, frac = 0.5, seed.n = 154, verbose = FALSE, threads = 1) 
+{
+    setDTthreads(threads) #horrible segfaults occur if you don't include this
+    reads = concatemers
+    
+    if (drop.small) {
+        if (verbose) cmessage(paste0("Filtering out reads < ", small))
+        reads = gr2dt(reads)
+        setkeyv(reads, c("seqnames", "start"))
+        reads[, `:=`(max.local.dist, end[.N] - start[1]), by = cid]
+        reads = reads[max.local.dist > small]
+        reads = dt2gr(reads)
+    }
+    reads$tix = gr.match(reads, tiles)
+    reads = as.data.table(reads)[, `:=`(count, .N), by = cid] 
+    mat = suppressMessages(dcast.data.table(reads[count > 2, ] %>% gr2dt, cid ~ 
+        tix, value.var = "strand", fill = 0))
+    mat2 = mat[, c(list(cid = cid), lapply(.SD, function(x) x >= 
+        1)), .SDcols = names(mat)[-1]]
+    mat2 = suppressWarnings(mat2[, `:=`("NA", NULL)])
+    reads.ids = mat2$cid
+    mat2 = as.data.table(lapply(mat2, as.numeric))
+    if (take_sub_sample) {
+        tot.num = nrow(mat2[rowSums(mat2[, -1]) > 1, ])
+        if (verbose) cmessage(paste0("Total number of rows are: ", tot.num))
+        if (verbose) cmessage("taking a subsample")
+        number.to.subsample = pmax(round(tot.num * frac), 1000)
+        if (verbose) cmessage(paste0("Number sampled: ", number.to.subsample))
+        set.seed(seed.n)
+        gt = mat2[rowSums(mat2[, -1]) > 1, ][sample(.N, number.to.subsample), 
+            ]
+    }
+    else {
+        gt = mat2[rowSums(mat2[, -1]) > 1, ]
+    }
+    ubx = gt$cid
+    if (verbose) cmessage("Matrices made")
+    gc()
+    pairs = t(do.call(cbind, apply(gt[, setdiff(which(colSums(gt) > 
+        1), 1), with = FALSE] %>% as.matrix, 2, function(x) combn(which(x != 0), 2)))) 
+    gt = as(as.matrix(as.data.frame(gt)), "sparseMatrix")    
+    p1 = gt[pairs[, 1], -1]
+    p2 = gt[pairs[, 2], -1]
+    matching = rowSums(as.array(p1 & p2))
+    total = rowSums(as.array(p1 | p2))    
+    dt = data.table(bx1 = pairs[, 1], bx2 = pairs[, 2], mat = matching, 
+        tot = total)[, `:=`(frac, mat/tot)]
+    dt2 = copy(dt)
+    dt2$bx2 = dt$bx1
+    dt2$bx1 = dt$bx2
+    dt3 = rbind(dt, dt2)
+    dt3$nmat = dt3$mat
+    dt3$nfrac = dt3$frac
+    setkeyv(dt3, c("nfrac", "nmat"))
+    dt3 = unique(dt3)
+    dt3.2 = dt3[order(nfrac, nmat, decreasing = T)]
+    if (verbose) cmessage("Pairs made")
+    gc()
+    k = k.knn
+    knn.dt = dt3.2[mat > 2 & tot > 2, .(knn = bx2[1:k]), by = bx1][!is.na(knn), 
+        ]
+    setkey(knn.dt)
+    knn = sparseMatrix(knn.dt$bx1, knn.dt$knn, x = 1)
+    knn.shared = knn %*% knn
+    if (verbose) cmessage("KNN done")
+    KMIN = k.min
+    A = knn.shared * sign(knn.shared > KMIN)
+    A[cbind(1:nrow(A), 1:nrow(A))] = 0
+    A <- as(A, "matrix")
+    A <- as(A, "sparseMatrix")
+    A = A + t(A)
+    G = graph.adjacency(A, weighted = TRUE, mode = "undirected")
+    cl.l = cluster_fast_greedy(G)
+    cl = cl.l$membership
+    if (verbose) cmessage("Communities made")
+    memb.dt = data.table(cid = ubx[1:nrow(A)], chid = cl)
+    reads = merge(reads, memb.dt, by = "cid")
+    reads[, `:=`(support, length(unique(cid))), by = chid]
+    reads = dt2gr(reads)
+    return(reads)
+}
+
+
+
+#' @name sliding_window_background
+#' @description
+#'
+#' Given n binsets generates random "background" binsets that mirrors the input binset characteristics with respect to chromosome, width, and distance.
+#'
+#' @param chromosome the chromosome to work on, string.
+#' @param binsets GRanges of bins with fields seqnames, start, end, and $bid specifying bin-set id
+#' @param n number of binsets to generate [1000]
+#' @param resolution to use for the simulation [5e4]
+#' @param seed seed for subsampling
+#' @param genome.to.use genome build to use for the simulation [hg38]
+#' @return GRanges of simulated binsets
+#' @export
+
+sliding_window_background = function(chromosome, binsets, seed = 145, n = 1000, resolution = 5e4, num.cores = 10, genome.to.use = "BSgenome.Hsapiens.UCSC.hg38::Hsapiens"){
+    set.seed(seed)
+    this.final.dt = data.table()
+    chr.int = .chr2str(chromosome)
+    upper.bound = hg_seqlengths(genome = genome.to.use)[chr.int]
+#### get the relevant distributions
+    dist.pdf.dt = extract_dw(binsets, num.cores = num.cores)
+    this.num = 0
+    this.tot = 0
+    i = 0
+    message("Generating GRanges")
+    this.list = pbmclapply(1:n, function(i){
+        this.iter = i
+        this.card = round(rdens_sliding(1, den = density(dist.pdf.dt[type == "cardinality"]$V1),
+                                dat = dist.pdf.dt[type == "cardinality"]$V1))
+        if (this.card > 0){
+            this.dists = tryCatch(round_any(c(0, (rdens_sliding(this.card-1, den = density(dist.pdf.dt[type == "dist"]$V1), dat = dist.pdf.dt[type== "dist"]$V1))), resolution), error = function(e) NULL)
+            this.width = tryCatch(round_any(rdens_sliding(this.card, den = density(dist.pdf.dt[type == "width"]$V1), dat = dist.pdf.dt[type == "width"]$V1), resolution),  error = function(e) NULL)
+            if (!is.null(this.dists) & !is.null(this.width)){
+                this.width = this.width-1
+                this.dists = this.dists+1
+####
+                this.loc.dt = data.table()
+                for (j in 1:this.card){
+                    if (j == 1){
+                        anchor.pt = start(gr.sample(hg_seqlengths(genome = genome.to.use)[chr.int], 1, wid = 1))
+                        sts = anchor.pt + this.dists[j]
+                        this.gr = GRanges(seqnames = Rle(c(chromosome), c(1)),
+                                          ranges = IRanges(c(sts)))
+                        this.gr = this.gr + (this.width[j]/2)
+                        this.dt = gr2dt(this.gr)
+                        this.loc.dt = rbind(this.loc.dt, this.dt)
+                    } else {
+                        sts = tail(this.loc.dt, n = 1)$end + this.dists[j]
+                        ends = sts + this.width[j]
+                        this.gr = GRanges(seqnames = Rle(c(chromosome), c(1)),
+                                          ranges = IRanges(sts, end = ends))
+                        this.dt = gr2dt(this.gr)
+                        this.loc.dt = rbind(this.loc.dt, this.dt)
+                    }
+                }
+                this.loc.dt[, bid := paste0("rand_", i)]
+                this.loc.gr = dt2gr(this.loc.dt)
+                if (!any(start(this.loc.gr) > upper.bound)){
+                    this.num = this.num + 1
+                    this.final.dt = rbind(this.final.dt, this.loc.dt)
+                } else {this.final.dt = data.table(NA)}
+            } else {this.final.dt = data.table(NA)}
+        } else {this.final.dt = data.table(NA)}
+        return(this.final.dt)
+    }, mc.cores = num.cores)
+    this.dt = rbindlist(this.list, fill = TRUE)
+    return(this.dt)
+}
+
+
+
 #' @name smessage
 #' @description
 #'
@@ -1028,7 +1462,7 @@ cmessage = function(..., pre = 'Chromunity')
 #' @name Chromunity
 #' @title Chromunity
 #'
-#' 
+#' @export
 Chromunity = function(binsets = GRanges(), concatemers = GRanges(), meta = data.table(), verbose = TRUE)
 {
   ChromunityObj$new(binsets = binsets, concatemers = concatemers, meta = meta, verbose = verbose)
@@ -1043,6 +1477,7 @@ Chromunity = function(binsets = GRanges(), concatemers = GRanges(), meta = data.
 #' The main accessors are $binsets and $concatemers which each return GRanges linked through a chromunity id $chid field
 #'
 #' Chromunities can be subsetted, concatenated.  Concatenation will result in deduping any $chid that are present in two inputs. 
+#' @export
 ChromunityObj = R6::R6Class("Chromunity", 
   public = list(
     initialize = function(binsets = GRanges(), concatemers = GRanges(), meta = data.table(), verbose = TRUE)
@@ -1096,12 +1531,14 @@ ChromunityObj = R6::R6Class("Chromunity",
 
       }
       concatemers = as.data.table(concatemers) %>% setkey(chid)
-      
-      if (length(setdiff(concatemers$chid, binsets$chid)))
-      {
-        warning("concatemers defined that don't map to provided binsets, removing")
-        concatemers = concatemers[.(unique(binsets$chid)), ]
-      }
+
+      ## if (!retain){
+      ##     if (length(setdiff(concatemers$chid, binsets$chid)))
+      ##     {
+      ##         warning("concatemers defined that don't map to provided binsets, removing")
+      ##         concatemers = concatemers[.(unique(binsets$chid)), ]
+      ##     }
+      ## }
 
       ## tally support as keyed vector
       support = merge(private$pbinsets, concatemers, by = 'chid', allow.cartesian = TRUE)[, .(support = length(unique(cid))), keyby = chid]
@@ -2193,6 +2630,304 @@ glm.nb.fh = function (formula, data, weights, subset, na.action, start = NULL,
 
 
 
+
+########
+#' @name muffle
+#' @title muffle
+#'
+#' Runs code returning NULL is there is any error
+#'
+#' @param code R code to eval while suppressing all errors
+#' @param ... additional tryCatch arguments
+#' @return output of evaluated R code or NULL if error
+#' @author Marcin Imielinski
+#########
+muffle = function(code, ...)
+{
+  return(tryCatch(code, error = function(e) NULL, ...))
+}
+
+
+
+#' @name dflm
+#' @title dflm
+#' @description
+#'
+#' Formats lm, glm, or fisher.test outputs into readable data.table
+#'
+dflm = function(x, last = FALSE, nm = '')
+{
+  if (is.null(x))
+    out = data.frame(name = nm, method = as.character(NA), p = as.numeric(NA), estimate = as.numeric(NA), ci.lower = as.numeric(NA),  ci.upper = as.numeric(NA), effect = as.character(NA))
+  else if (any(c('lm', 'betareg') %in% class(x)))
+  {
+    
+    coef = as.data.frame(summary(x)$coefficients)
+    colnames(coef) = c('estimate', 'se', 'stat', 'p')
+    if (last)
+      coef = coef[nrow(coef), ]
+    coef$ci.lower = coef$estimate - 1.96*coef$se
+    coef$ci.upper = coef$estimate + 1.96*coef$se
+    if (!is.null(summary(x)$family))
+    {
+      fam = summary(x)$family$family
+      if (summary(x)$family$link %in% c('log', 'logit'))
+      {
+        coef$estimate = exp(coef$estimate)
+        coef$ci.upper= exp(coef$ci.upper)
+        coef$ci.lower= exp(coef$ci.lower)
+      }
+    }
+    else
+      fam = 'Unknown'
+    
+    if (!last)
+      nm = paste(nm, rownames(coef))
+    out = data.frame(name = nm, method = fam, p = signif(coef$p, 3), estimate = coef$estimate, ci.lower = coef$ci.lower, ci.upper = coef$ci.upper, effect = paste(signif(coef$estimate, 3), ' [',  signif(coef$ci.lower,3),'-', signif(coef$ci.upper, 3), ']', sep = ''))
+  }
+  else if (class(x) == 'htest')
+  {
+    if (is.null(x$estimate))
+      x$estimate = x$statistic
+    if (is.null(x$conf.int))
+      x$conf.int = c(NA, NA)
+    out = data.table(name = nm, method = x$method, estimate = x$estimate, ci.lower = x$conf.int[1], ci.upper = x$conf.int[2], effect = paste(signif(x$estimate, 3), ' [',  signif(x$conf.int[1],3),'-', signif(x$conf.int[2], 3), ']', sep = ''), p = x$p.value)
+  }
+  else if (class(x) == 'polr')
+  {
+    coef = coef(summary(x)) %>% as.data.frame
+    nm = paste(nm, rownames(coef))
+    coef = as.data.table(coef)
+    setnames(coef, c('estimate', 'se', 't'))
+    out = data.table(name = nm) %>% cbind(coef)
+    out$p =  pnorm(abs(out$t), lower.tail = FALSE) * 2
+    out[, ci.lower := estimate-1.96*se]
+    out[, ci.upper := estimate+1.96*se]
+    out[, effect := paste(signif(estimate, 3), ' [',  signif(ci.lower,3),'-', signif(ci.upper, 3), ']', sep = '')]
+  }
+  else
+  {
+    out = data.frame(name = nm, method = x$method, p = signif(x$p.value, 3), estimate = x$estimate, ci.lower = x$conf.int[1], ci.upper = x$conf.int[2], effect = paste(signif(x$estimate, 3), ' [',  signif(x$conf.int[1],3),'-', signif(x$conf.int[2], 3), ']', sep = ''))
+  }
+  
+  out$effect = as.character(out$effect)
+  out$name = as.character(out$name)
+  out$method = as.character(out$method)
+  rownames(out) = NULL
+  return(as.data.table(out))
+}
+
+
+
+
+#' Find peaks in a \code{GRanges} over a given meta-data field
+#'
+#' Finds "peaks" in an input GRanges with value field y.
+#' first piles up ranges according to field score (default = 1 for each range)
+#' then finds peaks.  If peel > 0, then recursively peels segments
+#' contributing to top peak, and recomputes nextpeak "peel" times
+#' if peel>0, bootstrap controls whether to bootstrap peak interval nbootstrap times
+#' if id.field is not NULL will peel off with respect to unique (sample) id of segment and not purely according to width
+#' if FUN preovided then will complex aggregating function of piled up values in dijoint intervals prior to computing "coverage"
+#' (FUN must take in a single argument and return a scalar)
+#' if id.field is not NULL, AGG.FUN is a second fun to aggregate values from id.field to output interval
+#'
+#' @param gr \code{GRanges} with some meta-data field to find peaks on
+#' @param field character field specifying metadata to find peaks on, default "score, can be NULL in which case the count is computed
+#' @param minima logical flag whether to find minima or maxima
+#' @param id.field character denoting field whose values specifyx individual tracks (e.g. samples)
+#' @param bootstrap logical flag specifying whether to bootstrap "peel off" to statistically determine peak boundaries
+#' @param na.rm remove NA from data
+#' @param pbootstrap  quantile of bootstrap boundaries to include in the robust peak boundary estimate (i.e. essentially specifies confidence interval)
+#' @param nboostrap   number of bootstraps to run
+#' @param FUN  function to apply to compute score for a single individual
+#' @param AGG.FUN function to aggregate scores across individuals
+#' @examples
+#'
+#' ## outputs example gene rich hotspots from example_genes GRanges
+#' pk = gr.peaks(example_genes)
+#'
+#' ## now add a numeric quantity to example_genes and compute
+#' ## peaks with respect to a numeric scores, e.g. "exon_density"
+#' example_genes$exon_density = example_genes$exonCount / width(example_genes)
+#' pk = gr.peaks(example_genes, field = 'exon_density')
+#'
+#' ## can quickly find out what genes lie in the top peaks by agggregating back with
+#' ## original example_genes
+#' pk[1:10] %$% example_genes[, 'name']
+#'
+#'
+gr.peaks = function(gr, field = 'score',
+                    minima = FALSE,
+                    peel = 0,
+                    id.field = NULL,
+                    bootstrap = TRUE,
+                    na.rm = TRUE,
+                    pbootstrap = 0.95,
+                    nbootstrap = 1e4,
+                    FUN = NULL,
+                    AGG.FUN = sum,
+                    peel.gr = NULL, ## when peeling will use these segs instead of gr (which can just be a standard granges of scores)
+                    score.only = FALSE,
+                    verbose = peel>0)
+{
+  
+  if (!is(gr, 'GRanges'))
+    gr = seg2gr(gr)
+  
+  if (is.null(field))
+    field = 'score'
+  
+  if (!(field %in% names(values(gr))))
+    values(gr)[, field] = 1
+  
+  if (is.logical(values(gr)[, field]))
+    values(gr)[, field] = as.numeric(values(gr)[, field])
+  
+  if (peel>0 & !score.only)
+  {
+    if (verbose)
+      cat('Peeling\n')
+    out = GRanges()
+    
+    if (bootstrap)
+      pbootstrap = pmax(0, pmin(1, pmax(pbootstrap, 1-pbootstrap)))
+    
+    ## peel.gr are an over-ride if we have pre-computed the score and only want to match peaks to their supporting segments
+    if (is.null(peel.gr))
+      peel.gr = gr
+    
+    for (p in 1:peel)
+    {
+      if (verbose)
+        cat('Peel', p, '\n')
+      if (p == 1)
+        last = gr.peaks(gr, field, minima, peel = 0, FUN = FUN, AGG.FUN = AGG.FUN, id.field = id.field)
+      else
+      {
+        ## only need to recompute peak in region containing any in.peak intervals
+        in.peak = gr.in(gr, peak.hood)
+        
+        tmp = NULL
+        if (any(in.peak))
+          tmp = gr.peaks(gr[in.peak, ], field, minima, peel = 0, FUN = FUN, AGG.FUN = AGG.FUN, id.field = id.field)
+        last = grbind(last[!gr.in(last, peak.hood)], tmp)
+        names(values(last)) = field
+      }
+      
+      ## these are the regions with the maximum peak value
+      mix = which(values(last)[, field] == max(values(last)[, field]))
+      
+      ## there can be more than one peaks with the same value
+      ## and some are related since they are supported by the same gr
+      ## we group these peaks and define a tmp.peak to span all the peaks that are related
+      ## to the top peak
+      ## the peak is the span beteween the first and last interval with the maximum
+      ## peak value that are connected through at least one segment to the peak value
+      
+      ##
+      tmp.peak = last[mix]
+      
+      if (length(tmp.peak)>1)
+      {
+        tmp.peak.gr = gr[gr.in(gr, tmp.peak)]
+        ov = gr.findoverlaps(tmp.peak, tmp.peak.gr)
+        ed = rbind(ov$query.id, ov$subject.id+length(tmp.peak))[1:(length(ov)*2)]
+        cl = igraph::clusters(igraph::graph(ed), 'weak')$membership
+        tmp = tmp.peak[cl[1:length(tmp.peak)] %in% cl[1]]
+        peak = GRanges(seqnames(tmp)[1], IRanges(min(start(tmp)), max(end(tmp))))
+        values(peak)[, field] = values(tmp.peak)[, field][1]
+      }
+      else
+        peak = tmp.peak
+      ## tmp.peak is the interval spanning all the top values in this region
+      
+      in.peak1 =  gr.in(peel.gr, gr.start(peak))
+      in.peak2 = gr.in(peel.gr, gr.end(peak))
+      in.peak = in.peak1 | in.peak2
+      
+      ## peak.gr are the gr supporting the peak
+      peak.gr = peel.gr[in.peak1 & in.peak2] ## want to be more strict with segments used for peeling
+      peak.hood = reduce(peak.gr) ## actual peak will be a subset of this, and we can this in further iterations to limit peak revision
+      
+      in.peak = rep(FALSE, length(gr))
+      if (bootstrap && length(peak.gr))
+      {
+        ## asking across bootstrap smaples how does the intersection fluctuate
+        ## among segments contributing to the peak
+        
+        if (!is.null(id.field))
+        {
+          peak.gr = seg2gr(gr2dt(peak.gr)[, list(seqnames = seqnames[1], start = min(start),
+                                                 eval(parse(text = paste(field, '= sum(', field, '*(end-start))/sum(end-start)'))),end = max(end)),
+                                          by = eval(id.field)])
+          names(values(peak.gr))[ncol(values(peak.gr))] = field ## not sure why I need to do this line, should be done above
+        }
+        
+        B = matrix(sample(1:length(peak.gr), nbootstrap * length(peak.gr), prob = abs(values(peak.gr)[, field]), replace = TRUE), ncol = length(peak.gr))
+        ## bootstrap segment samples
+        ## the intersection is tha max start and min end among the segments in each
+        st = apply(matrix(start(peak.gr)[B], ncol = length(peak.gr)), 1, max)
+        en = apply(matrix(end(peak.gr)[B], ncol = length(peak.gr)), 1, min)
+        
+        ## take the left tail of the start position as the left peak boundary
+        start(peak) = quantile(st, (1-pbootstrap)/2)
+        
+        ## and the right tail of the end position as the right peak boundary
+        end(peak) = quantile(en, pbootstrap + (1-pbootstrap)/2)
+        
+        in.peak =  gr.in(gr, peak)
+      }
+      gr = gr[!in.peak]
+      peak$peeled = TRUE
+      out = c(out, peak)
+      if (length(gr)==0)
+        return(out)
+    }
+    last$peeled = FALSE
+    return(c(out, last[-mix]))
+  }
+  
+  if (na.rm)
+    if (any(na <- is.na(values(gr)[, field])))
+      gr = gr[!na]
+  
+  if (!is.null(FUN))
+  {
+    agr = GenomicRanges::disjoin(gr)
+    values(agr)[, field] = NA
+    tmp.mat = cbind(as.matrix(values(gr.val(agr[, c()], gr, field, weighted = FALSE, verbose = verbose, by = id.field, FUN = FUN, default.val = 0))))
+    values(agr)[, field] = apply(tmp.mat, 1, AGG.FUN)
+    gr = agr
+  }
+  
+  cov = as(GenomicRanges::coverage(gr, weight = values(gr)[, field]), 'GRanges')
+  
+  if (score.only)
+    return(cov)
+  
+  dcov = diff(cov$score)
+  dchrom = diff(as.integer(seqnames(cov)))
+  
+  if (minima)
+    peak.ix = (c(0, dcov) < 0 & c(0, dchrom)==0) & (c(dcov, 0) > 0 & c(dchrom, 0)==0)
+  else
+    peak.ix = (c(0, dcov) > 0 & c(0, dchrom)==0) & (c(dcov, 0) < 0 & c(dchrom, 0)==0)
+  
+  out = cov[which(peak.ix)]
+  
+  if (minima)
+    out = out[order(out$score)]
+  else
+    out = out[order(-out$score)]
+  
+  names(values(out))[1] = field
+  
+  return(out)
+}
+
+
+
 ################
 ## Legacy code
 ################
@@ -2637,3 +3372,5 @@ glm.nb.fh = function (formula, data, weights, subset, na.action, start = NULL,
 ## #' @private 
 ## cmessage = function(..., pre = 'Chromunity')
 ##   message(pre, ' ', paste0(as.character(Sys.time()), ': '), ...)
+
+

@@ -12,17 +12,17 @@ Chromunities can be subsetted, concatenated.  Concatenation will result in dedup
 \section{Methods}{
 \subsection{Public methods}{
 \itemize{
-\item \href{#method-new}{\code{ChromunityObj$new()}}
-\item \href{#method-subset}{\code{ChromunityObj$subset()}}
-\item \href{#method-print}{\code{ChromunityObj$print()}}
-\item \href{#method-gtrack}{\code{ChromunityObj$gtrack()}}
-\item \href{#method-gm}{\code{ChromunityObj$gm()}}
-\item \href{#method-clone}{\code{ChromunityObj$clone()}}
+\item \href{#method-Chromunity-new}{\code{ChromunityObj$new()}}
+\item \href{#method-Chromunity-subset}{\code{ChromunityObj$subset()}}
+\item \href{#method-Chromunity-print}{\code{ChromunityObj$print()}}
+\item \href{#method-Chromunity-gtrack}{\code{ChromunityObj$gtrack()}}
+\item \href{#method-Chromunity-gm}{\code{ChromunityObj$gm()}}
+\item \href{#method-Chromunity-clone}{\code{ChromunityObj$clone()}}
 }
 }
 \if{html}{\out{<hr>}}
-\if{html}{\out{<a id="method-new"></a>}}
-\if{latex}{\out{\hypertarget{method-new}{}}}
+\if{html}{\out{<a id="method-Chromunity-new"></a>}}
+\if{latex}{\out{\hypertarget{method-Chromunity-new}{}}}
 \subsection{Method \code{new()}}{
 \subsection{Usage}{
 \if{html}{\out{<div class="r">}}\preformatted{ChromunityObj$new(
@@ -35,8 +35,8 @@ Chromunities can be subsetted, concatenated.  Concatenation will result in dedup
 
 }
 \if{html}{\out{<hr>}}
-\if{html}{\out{<a id="method-subset"></a>}}
-\if{latex}{\out{\hypertarget{method-subset}{}}}
+\if{html}{\out{<a id="method-Chromunity-subset"></a>}}
+\if{latex}{\out{\hypertarget{method-Chromunity-subset}{}}}
 \subsection{Method \code{subset()}}{
 \subsection{Usage}{
 \if{html}{\out{<div class="r">}}\preformatted{ChromunityObj$subset(ix, ...)}\if{html}{\out{</div>}}
@@ -44,8 +44,8 @@ Chromunities can be subsetted, concatenated.  Concatenation will result in dedup
 
 }
 \if{html}{\out{<hr>}}
-\if{html}{\out{<a id="method-print"></a>}}
-\if{latex}{\out{\hypertarget{method-print}{}}}
+\if{html}{\out{<a id="method-Chromunity-print"></a>}}
+\if{latex}{\out{\hypertarget{method-Chromunity-print}{}}}
 \subsection{Method \code{print()}}{
 \subsection{Usage}{
 \if{html}{\out{<div class="r">}}\preformatted{ChromunityObj$print(...)}\if{html}{\out{</div>}}
@@ -53,8 +53,8 @@ Chromunities can be subsetted, concatenated.  Concatenation will result in dedup
 
 }
 \if{html}{\out{<hr>}}
-\if{html}{\out{<a id="method-gtrack"></a>}}
-\if{latex}{\out{\hypertarget{method-gtrack}{}}}
+\if{html}{\out{<a id="method-Chromunity-gtrack"></a>}}
+\if{latex}{\out{\hypertarget{method-Chromunity-gtrack}{}}}
 \subsection{Method \code{gtrack()}}{
 \subsection{Usage}{
 \if{html}{\out{<div class="r">}}\preformatted{ChromunityObj$gtrack(
@@ -70,8 +70,8 @@ Chromunities can be subsetted, concatenated.  Concatenation will result in dedup
 
 }
 \if{html}{\out{<hr>}}
-\if{html}{\out{<a id="method-gm"></a>}}
-\if{latex}{\out{\hypertarget{method-gm}{}}}
+\if{html}{\out{<a id="method-Chromunity-gm"></a>}}
+\if{latex}{\out{\hypertarget{method-Chromunity-gm}{}}}
 \subsection{Method \code{gm()}}{
 \subsection{Usage}{
 \if{html}{\out{<div class="r">}}\preformatted{ChromunityObj$gm(binsize = 5000)}\if{html}{\out{</div>}}
@@ -79,8 +79,8 @@ Chromunities can be subsetted, concatenated.  Concatenation will result in dedup
 
 }
 \if{html}{\out{<hr>}}
-\if{html}{\out{<a id="method-clone"></a>}}
-\if{latex}{\out{\hypertarget{method-clone}{}}}
+\if{html}{\out{<a id="method-Chromunity-clone"></a>}}
+\if{latex}{\out{\hypertarget{method-Chromunity-clone}{}}}
 \subsection{Method \code{clone()}}{
 The objects of this class are cloneable with this method.
 \subsection{Usage}{
