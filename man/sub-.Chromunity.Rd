@@ -26,6 +26,4 @@ Overrides the subset operator x[] for use with Chromunity
 }
 \author{
 Marcin Imielinski
-
-Marcin Imielinski
 }
