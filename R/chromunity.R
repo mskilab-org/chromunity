@@ -11,6 +11,7 @@
 #' @import zoo
 #' @import arrow
 #' @importFrom pbmcapply pbmclapply 
+#' @importFrom pbmcapply mclapply
 #' @importFrom stats median
 #' @importFrom stats na.omit
 #' @importFrom MASS ginv
@@ -173,8 +174,9 @@ csv2gr = function(path = NULL, col_names = NULL, save_path = NULL, prefix = "Nla
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
 
-re_background = function(binsets, n = length(binsets), pseudocount = 1, resolution = 5e4, gg=NULL, interchromosomal.dist = 1e8, interchromosomal.table = NULL, verbose = TRUE, mc.cores = 5)
+re_background = function(binsets, n = length(binsets), pseudocount = 1, resolution = 5e4, gg=NULL, interchromosomal.dist = 1e8, interchromosomal.table = NULL, verbose = TRUE, mc.cores = 5, seed=42)
 {
+  set.seed(seed)
   if (!length(binsets))
     stop('empty binsets')
 
@@ -710,15 +712,16 @@ powerset = function(set, min.k = 1, max.k = 5)
 #' @return fitted model that can be applied to new cases
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
-fit = function(annotated.binsets, nb = TRUE, return.model = TRUE, verbose = TRUE, maxit = 50)
+fit = function(annotated.binsets, nb = TRUE, return.model = TRUE, verbose = TRUE, maxit = 50, seed = 42)
 {
+  set.seed(seed)
   if (!nb) stop('not yet supported')
   ## added sumcounts as cov and width as only offset
   covariates = setdiff(names(annotated.binsets), c('bid', 'setid', 'mean.dist', 'count'))
   fmstring = paste('count ~', paste(paste0('log(', covariates, ')', collapse = ' + ')))
   ## fmstring = paste0(fmstring, " + ", "offset(log(width))")
   fm = formula(fmstring)
-##
+  ##
   model = tryCatch(glm.nb(formula = fm, data = annotated.binsets, control = glm.control(maxit = maxit)), error = function(e) NULL)
 
   return(list(model = model, covariates = covariates))
@@ -838,6 +841,7 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
 
 re_chromunity = function(concatemers, resolution = 5e4, region = si2gr(concatemers), windows = NULL, piecewise = TRUE, shave = FALSE, bthresh = 3, cthresh = 3, max.size = 2^31-1, subsample.frac = NULL, window.size = 2e6, max.slice = 1e6, min.support = 5, stride = window.size/2, mc.cores = 5, k.knn = 25, k.min = 5, pad = 1e3, peak.thresh = 0.85, seed = 42, verbose = TRUE)
 {
+  set.seed(seed)
   if (is.null(windows))
       windows = gr.start(gr.tile(region, stride))+window.size/2
       windows = dt2gr(gr2dt(windows)[, start := ifelse(start < 0, 1, start)])
@@ -1372,7 +1376,7 @@ concatemer_chromunity_sliding <- function (concatemers, k.knn = 10, k.min = 1, t
 #' @param seed seed for subsampling
 #' @param genome.to.use genome build to use for the simulation [hg38]
 #' @return GRanges of simulated binsets
-
+#' @export
 
 sliding_window_background = function(chromosome, binsets, seed = 145, n = 1000, resolution = 5e4, num.cores = 10, genome.to.use = "BSgenome.Hsapiens.UCSC.hg38::Hsapiens"){
     set.seed(seed)
@@ -1458,7 +1462,7 @@ cmessage = function(..., pre = 'Chromunity')
 #' @name Chromunity
 #' @title Chromunity
 #'
-#' 
+#' @export
 Chromunity = function(binsets = GRanges(), concatemers = GRanges(), meta = data.table(), verbose = TRUE)
 {
   ChromunityObj$new(binsets = binsets, concatemers = concatemers, meta = meta, verbose = verbose)
@@ -1473,6 +1477,7 @@ Chromunity = function(binsets = GRanges(), concatemers = GRanges(), meta = data.
 #' The main accessors are $binsets and $concatemers which each return GRanges linked through a chromunity id $chid field
 #'
 #' Chromunities can be subsetted, concatenated.  Concatenation will result in deduping any $chid that are present in two inputs. 
+#' @export
 ChromunityObj = R6::R6Class("Chromunity", 
   public = list(
     initialize = function(binsets = GRanges(), concatemers = GRanges(), meta = data.table(), verbose = TRUE)
@@ -2636,7 +2641,6 @@ glm.nb.fh = function (formula, data, weights, subset, na.action, start = NULL,
 #' @param ... additional tryCatch arguments
 #' @return output of evaluated R code or NULL if error
 #' @author Marcin Imielinski
-#' @export
 #########
 muffle = function(code, ...)
 {
@@ -2651,7 +2655,6 @@ muffle = function(code, ...)
 #'
 #' Formats lm, glm, or fisher.test outputs into readable data.table
 #'
-#' @export
 dflm = function(x, last = FALSE, nm = '')
 {
   if (is.null(x))
@@ -2739,7 +2742,6 @@ dflm = function(x, last = FALSE, nm = '')
 #' @param nboostrap   number of bootstraps to run
 #' @param FUN  function to apply to compute score for a single individual
 #' @param AGG.FUN function to aggregate scores across individuals
-#' @export
 #' @examples
 #'
 #' ## outputs example gene rich hotspots from example_genes GRanges
