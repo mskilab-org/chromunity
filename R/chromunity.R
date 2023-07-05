@@ -11,7 +11,7 @@
 #' @import zoo
 #' @import arrow
 #' @importFrom pbmcapply pbmclapply 
-#' @importFrom pbmcapply mclapply
+#' @importFrom parallel mclapply
 #' @importFrom stats median
 #' @importFrom stats na.omit
 #' @importFrom MASS ginv
