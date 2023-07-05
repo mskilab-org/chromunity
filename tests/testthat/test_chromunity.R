@@ -16,6 +16,7 @@ tiles_gr.path = system.file("extdata", "tiles_gr.rds", package = 'chromunity')
 chromunity_out.path = system.file("extdata", "chromunity_out.rds", package = 'chromunity')
 annotate_out.path = system.file("extdata", "annotate_out.rds", package = 'chromunity')
 example_dir.path = system.file("extdata", "example_gr.rds", package = 'chromunity')
+back_binsets.path = system.file("extdata", "back_binsets.rds", package = 'chromunity')
 
 ## Tests
 
@@ -51,14 +52,17 @@ test_that("annotate", {
 test_that("synergy", {
     example_annot = readRDS(annotate_out.path)
     example_chrom = readRDS(chromunity_out.path)
+    back_binsets = readRDS(back_binsets.path)
     binsets = gr2dt(example_chrom$binsets)
     binsets[, c := .N, by = bid]
-    binsets = dt2gr(binsets[c > 1])  
-    back_binsets = re_background(binsets)
+    binsets = dt2gr(binsets[c > 1])
+    this.annotate = annotate(binsets = binsets, concatemers = example_chrom$concatemers, mc.cores = 2)
     back_annot = annotate(back_binsets, concatemers = example_chrom$concatemers)
     back_model = fit(back_annot)
-    this.synergy = synergy(binsets = binsets, concatemers = example_chrom$concatemers, model=back_model, annotated.binsets = example_annot, resolution = 1e5, maxit = 10, mc.cores = 2)
+    this.synergy = synergy(binsets = binsets, concatemers = example_chrom$concatemers, model=back_model, annotated.binsets = example_annot, resolution = 1e5, maxit = 50, mc.cores = 2)
     expect_identical(class(this.synergy)[1], "data.table")
 })
+
+#add test cases for background functions
 
 
