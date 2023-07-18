@@ -18,6 +18,7 @@ jobs:
           - '4.0.2'
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      CODECOV_TOKEN: ${{ secrets.CODECOV }}
 
     steps:
       - uses: actions/checkout@v2
@@ -66,3 +67,7 @@ jobs:
           R CMD build .
           R CMD check *.tar.gz --no-manual
         shell: bash
+        
+      - name: Test coverage
+        run: covr::codecov(token = Sys.getenv("CODECOV_TOKEN"))
+        shell: Rscript {0}
