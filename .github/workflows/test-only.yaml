@@ -28,6 +28,9 @@ jobs:
           r-version: ${{ matrix.R }}
 
       - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: covr
+
 
       - name: Install system dependencies
         run: |
