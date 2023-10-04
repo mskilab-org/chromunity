@@ -1201,8 +1201,9 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
     return(reads[, chid := NA][c(), ])
   }
   setkey(knn.dt)
+  max.dim = max(knn.dt)
   knn = sparseMatrix(knn.dt$bx1, knn.dt$knn, x = 1)
-  colnames(knn) = 1:max.dim
+  colnames(knn) = 1:max.dim 
   rownames(knn) = 1:max.dim
   knn.shared = knn %*% knn
   if (verbose) cmessage("KNN done")
