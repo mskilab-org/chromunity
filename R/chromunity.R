@@ -566,6 +566,7 @@ annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromos
   ## make all sub power sets up to k for all bids
   ## each row is now a binid with a setid and bid
   ## adding ones for sum.cov to be removed later
+
   sub.binsets = gr2dt(binsets)[, powerset(binid, 1, k), by = bid] %>% setnames(c('bid', 'setid', 'binid')) %>% setkey(bid)
   sub.binsets[, ":="(iid = 1:.N, tot = .N), by = .(setid, bid)] ## label each item in each sub-binset, and total count will be useful below
 
@@ -598,6 +599,7 @@ annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromos
   ##       }
   ##     })  %>% rbindlist
   ##   }
+  #browser()
   if (nrow(ov))
     {
       ucid = unique(ov$cid) ## split up to lists to leverage pbmclapply
@@ -1200,6 +1202,8 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
   }
   setkey(knn.dt)
   knn = sparseMatrix(knn.dt$bx1, knn.dt$knn, x = 1)
+  colnames(knn) = 1:max.dim
+  rownames(knn) = 1:max.dim
   knn.shared = knn %*% knn
   if (verbose) cmessage("KNN done")
   KMIN = k.min
