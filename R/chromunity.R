@@ -46,10 +46,10 @@ parquet2gr = function(path = NULL, col_names = NULL, save_path = NULL, prefix = 
         stop("Need a valid path to all Pore-C parquets.")
     }
 
-    all.paths = data.table(file_path = dir(path, all.files = TRUE, recursive = TRUE, full = TRUE))[grepl("*pore_c.parquet*", file_path)]
+    all.paths = data.table(file_path = dir(path, all.files = TRUE, recursive = TRUE, full = TRUE))[grepl("*.parquet*", file_path)]
 
     if(nrow(all.paths) == 0){
-        stop("No valid files files with suffix pore_c.parquet found.")
+        stop("No valid files files with suffix .parquet found.")
     } 
 
     if(verbose){"Beginning to read parquet files"}
