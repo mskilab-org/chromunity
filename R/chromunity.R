@@ -994,7 +994,7 @@ shave_concatemers = function(concatemers, cthresh = 3, bthresh = 2, verbose = TR
 concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
     drop.small = FALSE, small = 1e4, max.size = 2^31-1,
     subsample.frac = NULL, seed = 42, verbose = TRUE, debug = FALSE, threads = 1, filename = NULL, mc.cores=5)  
-
+  {
   setDTthreads(threads) #horrible segfaults occur if you don't include this
   reads = concatemers
 
