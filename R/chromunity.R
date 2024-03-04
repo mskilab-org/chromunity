@@ -46,7 +46,7 @@ parquet2gr = function(path = NULL, col_names = NULL, save_path = NULL, prefix = 
         stop("Need a valid path to all Pore-C parquets.")
     }
 
-    all.paths = data.table(file_path = dir(path, all.files = TRUE, recursive = TRUE, full = TRUE))[grepl("*pore_c.parquet*", file_path)]
+    all.paths = data.table(file_path = dir(path, all.files = TRUE, recursive = TRUE, full = TRUE))[grepl("*.parquet*", file_path)]
 
     if(nrow(all.paths) == 0){
         stop("No valid files files with suffix pore_c.parquet found.")
@@ -429,9 +429,11 @@ extract_dw = function(chromunity.out, num.cores = 10){
     message("Generating distributions")
     list.dw.vec = pbmclapply(1:length(unique.chrom), function(i){
         this.uc = unique.chrom[i]
-        this.chrom = chromunity.out %Q% (bid == this.uc)
+        this.chrom = chromunity.out %Q% (bid %in% this.uc)
 #####
         ## modified for immidiate dists
+        this.chrom.dt = gr2dt(this.chrom)
+        
         dist.vec = as.data.table(gr.dist(this.chrom)[lower.tri(gr.dist(this.chrom))])[, type := "dist"]
         width.vec = as.data.table(width(this.chrom))[, type := "width"]
         this.card = as.data.table(length(this.chrom))[, type := "cardinality"]
@@ -567,6 +569,7 @@ annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromos
   ## each row is now a binid with a setid and bid
   ## adding ones for sum.cov to be removed later
 
+  ###browser()
   sub.binsets = gr2dt(binsets)[, powerset(binid, 1, k), by = bid] %>% setnames(c('bid', 'setid', 'binid')) %>% setkey(bid)
   sub.binsets[, ":="(iid = 1:.N, tot = .N), by = .(setid, bid)] ## label each item in each sub-binset, and total count will be useful below
 
@@ -642,10 +645,10 @@ annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromos
       this.dists = this.sub.binsets[, bindist[as.data.table(expand.grid(i = binid, j = binid))[i<j, ], .(dist = c('min.dist',  'max.dist'), value = quantile(distance+1,  c(0, 1)))], by = .(setid, bid)] %>% dcast(bid + setid ~ dist, value.var = 'value')
       })  %>% rbindlist
 
-
+  ##browser()
   if (verbose) smessage('Computing marginal sum per bid')
   margs = counts[, .(sum.counts = sum(count)), by = .(bid)]
-
+   
   if (verbose) smessage('Computing total width and cardinality per setid')
   ubid = unique(sub.binsets$bid) ## split up to lists to leverage pbmclapply
   ubidl = split(ubid, ceiling(runif(length(ubid))*numchunks)) ## randomly chop up ubid into twice the number of mc.coreso
@@ -711,7 +714,7 @@ annotate = function(binsets, concatemers, covariates = NULL, k = 5, interchromos
       annotated.binsets = merge(annotated.binsets, covdata, all.x = TRUE, by = c('bid', 'setid'))
     }
   }
-  return(annotated.binsets)
+  return(annotated.binsets) 
 }
 
 
@@ -868,7 +871,7 @@ synergy = function(binsets, concatemers, background.binsets = NULL, model = NULL
 #' @author Aditya Deshpande, Marcin Imielinski
 #' @export
 
-re_chromunity = function(concatemers, resolution = 5e4, region = si2gr(concatemers), windows = NULL, piecewise = TRUE, shave = FALSE, bthresh = 3, cthresh = 3, max.size = 2^31-1, subsample.frac = NULL, window.size = 2e6, max.slice = 1e6, min.support = 5, stride = window.size/2, mc.cores = 5, k.knn = 25, k.min = 5, pad = 1e3, peak.thresh = 0.85, seed = 42, verbose = TRUE, filename=NULL, s.threshold = 2)
+re_chromunity = function(concatemers, resolution = 5e4, region = si2gr(concatemers), windows = NULL, piecewise = TRUE, shave = FALSE, bthresh = 3, cthresh = 3, max.size = 2^31-1, subsample.frac = NULL, window.size = 2e6, max.slice = 1e6, min.support = 5, stride = window.size/2, mc.cores = 5, k.knn = 25, k.min = 5, pad = 1e3, peak.thresh = 0.85, seed = 42, verbose = TRUE, filename=NULL)
 {
   set.seed(seed)
   if (is.null(windows))
@@ -926,7 +929,7 @@ re_chromunity = function(concatemers, resolution = 5e4, region = si2gr(concateme
   if (verbose)
       cmessage(sprintf('Running concatemer communities with %s concatemers and %s bins', ncat, nbin))
   
-    cc = concatemer_communities(concatemers, k.knn = k.knn, k.min = k.min, seed = seed, max.size = max.size, verbose = verbose, subsample.frac = subsample.frac, filename = filename, s.threshold = s.threshold)
+    cc = concatemer_communities(concatemers, k.knn = k.knn, k.min = k.min, seed = seed, max.size = max.size, verbose = verbose, subsample.frac = subsample.frac, filename = filename)
   
     if (length(cc))
       cc = cc %Q% (support>=min.support)
@@ -1012,10 +1015,11 @@ shave_concatemers = function(concatemers, cthresh = 3, bthresh = 2, verbose = TR
 #' @param subsample.frac optional arg specifying fraction of concatemers to subsample [NULL]
 #' @param seed seed for subsampling
 #' @param threads used to set number of data table threads to use with setDTthreads function, segfaults may occur if >1
+#' @param filename optional argument to write gml object specifying network used for community detection 
 #' @return GRanges of concatemers labeled by $c mmunity which specifies community id
 concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
     drop.small = FALSE, small = 1e4, max.size = 2^31-1,
-    subsample.frac = NULL, seed = 42, verbose = TRUE, debug = FALSE, threads = 1, filename = NULL, mc.cores=5, s.threshold = 2)  
+    subsample.frac = NULL, seed = 42, verbose = TRUE, debug = FALSE, threads = 1, filename = NULL, mc.cores=5)  
 {
   setDTthreads(threads) #horrible segfaults occur if you don't include this
   reads = concatemers
@@ -1089,7 +1093,6 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
   ## all pairs of concatemers that share a bin
   reads2[, cidi := as.integer(cid)]
 
-  #saveRDS(reads2, 'honker_run/reads2.rds')
   ## size is the number of pairs which can't exceed the max.size (or integer max)
   size = data.table(cid = reads2$cid, binid = reads2$binid)[, choose(.N,2), by = binid][, sum(as.numeric(V1))]
 
@@ -1111,14 +1114,13 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
   total.pairs = length(unique_cidi) * bins.per.concat * concats.per.bin
   numchunks = ceiling(total.pairs / 1e8)   ####~100 million pairs per chunk
   if (numchunks < 10) numchunks = 10
-  print(numchunks)
   
   ucidl = split(unique_cidi, ceiling(runif(length(unique_cidi))*numchunks)) ## randomly chop up cids
   setkey(unique_reads2_trim, 'cidi')
 
 
  # browser()
-  cmessage("start time")
+  cmessage("Beginning line graph construction")
   concatm = sparseMatrix(unique_reads2_trim$cidi %>% as.integer, unique_reads2_trim$binid %>% as.integer, x=1, repr='R')
   edgelist = pbmclapply(ucidl, mc.cores=mc.cores, mc.preschedule=TRUE, function(cidis) {
       dt = unique_reads2_trim[.(cidis), .(cidi1 = cidi, binid = binid), by=cidi]
@@ -1134,13 +1136,11 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
       total = Matrix::rowSums(p1 | p2)
       edgelist$tot = total
       edgelist[, frac := mat/tot]
-      edgelist = edgelist[mat > s.threshold & tot > s.threshold]
+      edgelist = edgelist[mat > 2 & tot > 2]
       return(edgelist)
   })
-  cmessage("end time")
+  cmessage("End line graph construction")
   edgelist = rbindlist(edgelist)
-  print(edgelist)
-  #saveRDS(edgelist, 'honker_run/edgelist.rds')
     
   edgelist_2 = copy(edgelist)
   edgelist_2$bx2 = edgelist$bx1
@@ -1154,7 +1154,7 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
   #concatm = t(incidence)
   
   k=k.knn
-  knn.dt = edgelist_3[mat > s.threshold & tot > s.threshold, .(knn = bx2[1:k]), by = bx1][!is.na(knn), ]
+  knn.dt = edgelist_3[mat > 2 & tot > 2, .(knn = bx2[1:k]), by = bx1][!is.na(knn), ]
   
   
   ## ncat = reads2$cid %>% unique %>% length
@@ -1215,7 +1215,6 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
   A[1,1] = 0
   G = graph.adjacency(A, weighted = TRUE, mode = "undirected")
 
-  print(sum(E(G)$weight == 0))
   cidis = as.integer(colnames(A))
   
   seqcount = reads2[, .N, by=c('cidi', 'seqnames')]
@@ -1227,8 +1226,8 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
   G = igraph::set_vertex_attr(G, 'seqnames', value=as.character(seqcount[cidis]$seqnames))
   G = igraph::set_vertex_attr(G, 'is_multichromosomal', value=as.integer(seqcount[cidis]$is_multichromosomal))
   
-  #cl.l = cluster_fast_greedy(G)
-  cl.l = cluster_leiden(G, objective_function='modularity')
+  cl.l = cluster_fast_greedy(G)
+  #cl.l = cluster_leiden(G, objective_function='modularity')
   
   
   #cl.l = cluster_fast_greedy(G)
