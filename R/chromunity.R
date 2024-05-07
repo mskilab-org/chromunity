@@ -1187,7 +1187,6 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
   A = A + t(A)
   G = graph.adjacency(A, weighted = TRUE, mode = "undirected")
 
-  ## browser()
 
   ## cidis = as.integer(colnames(A))
   
@@ -1253,16 +1252,12 @@ sliding_window_chromunity = function(concatemers, resolution = 5e4, region = si2
       stop("Provide chr as this is sliding window implementation")
   }
     
-  if (is.null(windows) & !is.null(genome)) {
+  if (is.null(windows))
     windows = gr.tile(hg_seqlengths(genome = genome), window.size/2)+window.size/4
-  } else if (is.null(genome)) {
-    windows = gr.tile(region, window.size/2)+window.size/4
-  }
-
-  windows = dt2gr(gr2dt(windows)[, start := ifelse(start < 0, 1, start)])
-  windows = windows %Q% (seqnames == chr)
-  windows = sortSeqlevels(windows)
-  windows = sort(windows)
+    windows = dt2gr(gr2dt(windows)[, start := ifelse(start < 0, 1, start)])
+    windows = windows %Q% (seqnames == chr)
+    windows = sortSeqlevels(windows)
+    windows = sort(windows)
    
   if (is.null(concatemers$cid))
   {
@@ -1274,11 +1269,10 @@ sliding_window_chromunity = function(concatemers, resolution = 5e4, region = si2
   
   params = data.table(k.knn = k.knn, k.min = k.min, seed = seed)
 
-  if (!is.null(resolution) & !is.null(genome)){
+  if (!is.null(resolution)){
       bins = gr.tile(hg_seqlengths(genome = genome), resolution)
-  } else if (!is.null(resolution) & is.null(genome)) {    
       #bins = bins %Q% (seqnames == chr) 
-      bins = gr.tile(region, resolution)
+      #bins = gr.tile(region, resolution)
   } else {
       bins = windows %>% unlist %>% gr.stripstrand %>% disjoin
   }
@@ -3009,58 +3003,6 @@ gr.peaks = function(gr, field = 'score',
   
   return(out)
 }
-
-
-#' @name shuffle_concatemers
-#' @description
-#'
-#' Generates an artificial set of concatemers with the same pairwise contact frequency as input concatemers
-#' but scrambled higher order contact information by performing a random walk on a pairwise contact frequency graph.
-#'
-#' Given a GRanges of monomers labeled by concatemer id $cid
-#'
-#' @param concatemers GRanges of monomers with field $cid indicating concatemer id and $binid represent bin id
-#' @param bins GRanges of bins to use for generating random walk
-#' @return GRanges of concatemers with scrambled higher order contact data 
-
-shuffle_concatemers = function(concatemers, bins=NULL, resolution=5e4) {
-
-    if(is.null(bins)) {
-        bins = gr.tile(hg_seqlengths(genome = genome), resolution)
-    }
-
-    contact_matrix = cocount(concatemers, bins = bins, by='cid')
-    A = contact_matrix$mat %>% as.matrix
-    rownames(A) <- NULL
-    colnames(A) <- NULL
-    A[cbind(1:nrow(A), 1:nrow(A))] = 0
-    A = A + t(A)
-    An = A 
-    An = round(1+10*An/min(An[An>0]))  
-    edges = as.data.table(which(An != 0, arr.ind = TRUE))[ , val := An[which(An!=0)]][, .(row = rep(row, val), col = rep(col, val))]
-    G = graph.edgelist(edges[, cbind(row, col)])
-
-    concats.dt = gr2dt(concatemers)
-    concat.counts = concats.dt[, new.count := .N, by='read_idx']
-    card = unique(concat.counts[, .(read_idx, new.count)])
-    this.steps = sum(card$new.count)
-         
-    RW = random_walk(G, start = 1, steps = sum(card$new.count)) %>% as.numeric
-    rm(G)
-    rm(edges)
-    out = contact_matrix$gr[RW]%>% gr2dt()
-    out$read_idx = card[, rep(read_idx, new.count)] 
-    out[, cid := read_idx]
-    return(out)
-}
-
-
-
-
-
-
-
-
 
 
 
