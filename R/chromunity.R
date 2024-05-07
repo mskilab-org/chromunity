@@ -1187,6 +1187,7 @@ concatemer_communities = function (concatemers, k.knn = 25, k.min = 5,
   A = A + t(A)
   G = graph.adjacency(A, weighted = TRUE, mode = "undirected")
 
+  ## browser()
 
   ## cidis = as.integer(colnames(A))
   
@@ -1252,12 +1253,16 @@ sliding_window_chromunity = function(concatemers, resolution = 5e4, region = si2
       stop("Provide chr as this is sliding window implementation")
   }
     
-  if (is.null(windows))
+  if (is.null(windows) & !is.null(genome)) {
     windows = gr.tile(hg_seqlengths(genome = genome), window.size/2)+window.size/4
-    windows = dt2gr(gr2dt(windows)[, start := ifelse(start < 0, 1, start)])
-    windows = windows %Q% (seqnames == chr)
-    windows = sortSeqlevels(windows)
-    windows = sort(windows)
+  } else if (is.null(genome)) {
+    windows = gr.tile(region, window.size/2)+window.size/4
+  }
+
+  windows = dt2gr(gr2dt(windows)[, start := ifelse(start < 0, 1, start)])
+  windows = windows %Q% (seqnames == chr)
+  windows = sortSeqlevels(windows)
+  windows = sort(windows)
    
   if (is.null(concatemers$cid))
   {
@@ -1269,10 +1274,11 @@ sliding_window_chromunity = function(concatemers, resolution = 5e4, region = si2
   
   params = data.table(k.knn = k.knn, k.min = k.min, seed = seed)
 
-  if (!is.null(resolution)){
+  if (!is.null(resolution) & !is.null(genome)){
       bins = gr.tile(hg_seqlengths(genome = genome), resolution)
+  } else if (!is.null(resolution) & is.null(genome)) {    
       #bins = bins %Q% (seqnames == chr) 
-      #bins = gr.tile(region, resolution)
+      bins = gr.tile(region, resolution)
   } else {
       bins = windows %>% unlist %>% gr.stripstrand %>% disjoin
   }
@@ -3003,6 +3009,9 @@ gr.peaks = function(gr, field = 'score',
   
   return(out)
 }
+
+
+
 
 
 
