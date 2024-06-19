@@ -1477,18 +1477,25 @@ concatemer_chromunity_sliding <- function (concatemers, k.knn = 10, k.min = 1, t
 #' @return GRanges of simulated binsets
 #' @export
 
-sliding_window_background = function(chromosome, binsets, seed = 145, n = 1000, resolution = 5e4, num.cores = 10, genome.to.use = "BSgenome.Hsapiens.UCSC.hg38::Hsapiens"){
+sliding_window_background = function(chromosome, binsets, seed = 145, n = 1000, resolution = 5e4, num.cores = 10, genome.to.use = "BSgenome.Hsapiens.UCSC.hg38::Hsapiens", region=si2gr(binsets)){
     set.seed(seed)
     this.final.dt = data.table()
     chr.int = .chr2str(chromosome)
-    upper.bound = hg_seqlengths(genome = genome.to.use)[chr.int]
+    if(is.null(genome.to.use)) {
+        upper.bound = gr2dt(region)$end
+    } else {
+        upper.bound = hg_seqlengths(genome = genome.to.use)[chr.int]
+    }
 #### get the relevant distributions
+
     dist.pdf.dt = extract_dw(binsets, num.cores = num.cores)
     this.num = 0
     this.tot = 0
     i = 0
     message("Generating GRanges")
+
     this.list = pbmclapply(1:n, function(i){
+        this.final.dt = data.table()
         this.iter = i
         this.card = round(rdens_sliding(1, den = density(dist.pdf.dt[type == "cardinality"]$V1),
                                 dat = dist.pdf.dt[type == "cardinality"]$V1))
@@ -1498,11 +1505,16 @@ sliding_window_background = function(chromosome, binsets, seed = 145, n = 1000, 
             if (!is.null(this.dists) & !is.null(this.width)){
                 this.width = this.width-1
                 this.dists = this.dists+1
-####
+                this.width[this.width < 1] = 1
                 this.loc.dt = data.table()
                 for (j in 1:this.card){
                     if (j == 1){
-                        anchor.pt = start(gr.sample(hg_seqlengths(genome = genome.to.use)[chr.int], 1, wid = 1))
+                        if (!is.null(genome.to.use)) {
+                            anchor.pt = start(gr.sample(hg_seqlengths(genome = genome.to.use)[chr.int], 1, wid = 1))
+                        } else {
+                            anchor.pt = start(gr.sample(region, 1, wid = 1))
+                        }
+        
                         sts = anchor.pt + this.dists[j]
                         this.gr = GRanges(seqnames = Rle(c(chromosome), c(1)),
                                           ranges = IRanges(c(sts)))
@@ -1512,6 +1524,8 @@ sliding_window_background = function(chromosome, binsets, seed = 145, n = 1000, 
                     } else {
                         sts = tail(this.loc.dt, n = 1)$end + this.dists[j]
                         ends = sts + this.width[j]
+                        if(ends > 2e9)
+                            break
                         this.gr = GRanges(seqnames = Rle(c(chromosome), c(1)),
                                           ranges = IRanges(sts, end = ends))
                         this.dt = gr2dt(this.gr)
@@ -1519,9 +1533,11 @@ sliding_window_background = function(chromosome, binsets, seed = 145, n = 1000, 
                     }
                 }
                 this.loc.dt[, bid := paste0("rand_", i)]
+                this.loc.dt[width<0, width := 0]
                 this.loc.gr = dt2gr(this.loc.dt)
                 if (!any(start(this.loc.gr) > upper.bound)){
                     this.num = this.num + 1
+
                     this.final.dt = rbind(this.final.dt, this.loc.dt)
                 } else {this.final.dt = data.table(NA)}
             } else {this.final.dt = data.table(NA)}
