@@ -1,10 +1,5 @@
 ####DUMPING ALL MY LITTLE TOOLS INTO A PACKAGE
 
-#making a little edit to see if my git access works
-
-
-
-
 rebin_community = function(concatemers, this.chrom.w, resolution = 5e4, rebin_thresh=0.85) {
     tiles = gr.tile(hg_seqlengths(genome = "BSgenome.Hsapiens.UCSC.hg38::Hsapiens"), resolution)
     this.chrom = gr2dt(concatemers %Q% (chid %in% this.chrom.w))
