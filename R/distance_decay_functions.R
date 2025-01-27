@@ -47,11 +47,6 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
     }
     bins$binid = 1:length(bins)
 
-    ##trains distance decay model using subset of higher order contacts in one chromosome. 
-    if(is.null(model)){
-        model = train_dist_decay_model_nozero(concatemers %Q% (seqnames==training.chr), bins %Q% (seqnames==training.chr), num.to.sample=num.to.sample)
-    }
-
     ##Creates virtual pairwise contacts using cocount
     ##This version of cocount removes duplicate contacts from monomers overlapping genomic bins more than once
     contact_matrix_unique = cocount(concatemers, bins = bins, by = 'read_idx')
@@ -92,7 +87,6 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
     dt.concats.sort = dt.concats[order(binid, cidi)]
     dt.concats.sort[, count := .N, by='cidi']
     
-
     ##choose subset of bin-pairs S by thresholding
     colnames(all.pairwise)[4] = 'pair.hashes'
 
@@ -121,8 +115,13 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
         pairwise.trimmed = pairwise.trimmed[!(j %in% bad.bins$binid)]
     }
 
-
     unique.pairs = pairwise.trimmed$pair.hashes %>% unique
+
+    #pre-processing done, now train the model
+    ##trains distance decay model using subset of higher order contacts in one chromosome. 
+    if(is.null(model)){
+        model = train_dist_decay_model_nozero(dt.concats.sort,pairwise.trimmed, bins %Q% (seqnames==training.chr), num.to.sample=num.to.sample)
+    }
 
     if(is.null(numchunks))
         numchunks = ceiling(length(unique.pairs) / pairs.per.chunk)  ###Will attempt to process 100 pairs per chunk
@@ -175,24 +174,7 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
     return(chrom)
 }
 
-train_dist_decay_model_nozero = function(concatemers, bins, pair.thresh=50, numchunks=NULL, num.to.sample=250000, pairs.to.sample = 10000, mode='poisson', pairs.per.chunk=100){
-    contact_matrix_unique = cocount(concatemers, bins = bins, by = 'read_idx')
-    all.pairwise = contact_matrix_unique$dat
-    all.pairwise$id = 1:dim(all.pairwise)[[1]]
-    colnames(all.pairwise)[3] = 'pair.value'
-    
-    concatemers$cid = concatemers$read_idx
-    binned.concats = bin_concatemers(concatemers, bins, max.slice=1e6, mc.cores=5)
-    dt.concats = unique(binned.concats[, c('cidi','binid')], by=c('cidi','binid'))
-    dt.concats.sort = dt.concats[order(binid, cidi)]
-    dt.concats.sort[, count := .N, by='cidi']
-    dt.concats.sort
-
-    colnames(all.pairwise)[4] = 'pair.hashes'
-    pairwise.trimmed = all.pairwise[pair.value >= pair.thresh]
-    pairwise.trimmed[, dist := j-i]
-    pairwise.trimmed = pairwise.trimmed[dist > 1]
-    
+train_dist_decay_model_nozero = function(dt.concats.sort, pairwise.trimmed,bins,  numchunks=NULL, num.to.sample=250000, pairs.to.sample = 10000, mode='poisson', pairs.per.chunk=100){
 
     unique.pairs = pairwise.trimmed$pair.hashes %>% unique
 
@@ -218,7 +200,6 @@ train_dist_decay_model_nozero = function(concatemers, bins, pair.thresh=50, numc
         return(annot.chunk)
     })
     dist.decay.train = rbindlist(scored.chunks)
-
     
     print('training model')
     covariates = c('value.a.ratio','value.b.ratio')
@@ -226,7 +207,6 @@ train_dist_decay_model_nozero = function(concatemers, bins, pair.thresh=50, numc
     ##fmstring = paste0(fmstring, " + ", "offset(log(total.concats))") ##this sometimes does 
 
     fm = formula(fmstring)
-
 
     if(num.to.sample > dim(dist.decay.train[dist.a <= 50 & dist.b <= 50])[[1]]) {
         train.subset = dist.decay.train[dist.a <= 50 & dist.b <= 50]
@@ -236,15 +216,12 @@ train_dist_decay_model_nozero = function(concatemers, bins, pair.thresh=50, numc
         train.subset = rbind(close.subset, far.subset)
     }
 
-    ##browser()
     if(mode=='poisson'){
         model = glm(formula = fm, data=train.subset[, c('num.concats','value.a.ratio','value.b.ratio')], control=glm.control(maxit=500), family='poisson')
     } else {
         model = glm.nb(formula = fm, data=train.subset[, c('num.concats','value.a.ratio','value.b.ratio')], control=glm.control(maxit=500))
     }
-
     return(model)
-    
 }
 
 bin_concatemers = function(concatemers, bins, max.slice = 1e6, mc.cores=5, verbose=TRUE, hyperedge.thresh=NULL) {
