@@ -1,5 +1,8 @@
 ####DUMPING ALL MY LITTLE TOOLS INTO A PACKAGE
 
+#making a little edit to see if my git access works
+
+
 
 
 rebin_community = function(concatemers, this.chrom.w, resolution = 5e4, rebin_thresh=0.85) {
