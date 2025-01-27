@@ -1,390 +1,5 @@
 #for now, dumping all chromunity functions into one file.
 
-rebin_community = function(concatemers, this.chrom.w, resolution = 5e4, rebin_thresh=0.85) {
-    tiles = gr.tile(hg_seqlengths(genome = "BSgenome.Hsapiens.UCSC.hg38::Hsapiens"), resolution)
-    this.chrom = gr2dt(concatemers %Q% (chid %in% this.chrom.w))
-    this.list.chrom = pbmclapply(1:length(this.chrom.w), function(j){
-        this.pr = dt2gr(this.chrom[chid %in% this.chrom.w[j]])
-        sum.this.com = gr.sum((this.pr)+1e4)
-        sum.this.com = gr2dt(sum.this.com)
-        sum.this.com[, q := quantile(score, rebin_thresh), by = seqnames]
-        sum.this.com[, q := ifelse(q < 5, 5, q)]
-        active.cont = tryCatch((tiles %&% dt2gr(sum.this.com[score > q])), error = function(e) NULL)
-        this.clust = gr2dt(gr.reduce(active.cont))
-        this.clust[, chid := this.chrom.w[j]]
-        return(this.clust)
-    }, mc.cores  = 10)
-    if(length(this.chrom.w) == 1){
-        this.list.chrom = this.list.chrom$value
-    }
-    this.chrom.dt = rbindlist(this.list.chrom, fill = TRUE)
-    return(this.chrom.dt)
-}
-
-
-load_bad_regions = function(chromosome, genome.to.use = "BSgenome.Hsapiens.UCSC.hg38::Hsapiens") {
-    this.chr = chromosome
-    if(genome.to.use == "BSgenome.Hsapiens.UCSC.hg38::Hsapiens"){
-        bands.td = gTrack::karyogram(file = "/gpfs/commons/groups/imielinski_lab/DB/UCSC/hg38.cytoband.txt")
-    } else {
-        bands.td = gTrack::karyogram(file = "/gpfs/commons/groups/imielinski_lab/DB/UCSC/hg19.cytoband.txt")
-    }
-    bands = bands.td@data
-    bands = grl.unlist(do.call(`GRangesList`, bands))
-    cen = bands %Q% (stain=="acen")
-    if (!(this.chr %in% c('chrX', 'chrY'))) {
-        chr.ind = as.numeric(sub("chr*","",this.chr))
-    } else if (this.chr == 'chrX'){
-        chr.ind = 23
-    } else {
-        chr.ind = 24
-    }
-    
-    this.max = GRanges(paste0(this.chr, ":", hg_seqlengths(genome = genome.to.use)[chr.ind]-1e6, "-",  hg_seqlengths(genome = genome.to.use)[chr.ind]))         
-    this.min = GRanges(paste0(this.chr, ":", "1-1e6"))                                                                                                                       
-    this.cen = (cen %Q% (seqnames == this.chr))+1e6
-    this.bad = c(this.min, this.cen, this.max) 
-    return(this.bad)
-}
-    
-
-
-
-
-
-##let's try to run giga chromunity interchromosomally
-evaluate_synergy_interchr = function(concatemers, leave_out_concatemers, chid.to.test, chromosome = NULL, filter_binsets = TRUE, folder = NULL, rebin_thresh = 0.85, mc.cores = 20, numchunks = mc.cores*200 + 1) {
-    this.chr = chromosome
-    bands.td = gTrack::karyogram(file = "/gpfs/commons/groups/imielinski_lab/DB/UCSC/hg38.cytoband.txt")
-    bands = bands.td@data
-    bands = grl.unlist(do.call(`GRangesList`, bands))
-    cen = bands %Q% (stain=="acen")
-    this.max = GRanges(paste0(this.chr, ":", hg_seqlengths()[sub("chr*","",this.chr)]-1e6, "-",  hg_seqlengths()[sub("chr*","",this.chr)]))         
-    this.min = GRanges(paste0(this.chr, ":", "1-1e6"))                                                                                                                       
-    this.cen = (cen %Q% (seqnames %in% this.chr))+1e6
-    this.bad = c(this.min, this.cen, this.max) 
-    if (!dir.exists(folder)) {
-        stop("output folder does not exist")
-    }
-    if(is.null(chromosome)){
-        chromosome = c(paste0("chr", c(as.character(1:22), "X")))
-    }
-    resolution = 1e4
-    tiles = gr.tile(hg_seqlengths(genome = "BSgenome.Hsapiens.UCSC.hg38::Hsapiens"), resolution)
-    gc5b = readRDS("/gpfs/commons/groups/imielinski_lab/projects/PoreC/db/gc.38.rds")
-    ## create a list of covariates
-    cov_list = list(gc5b)
-    ## Specify what kind of covariate it is. Score will be aggregated over bins while the number of intervals will be calculated otherwise.
-    names(cov_list) <- c("score:gc.cov")
-    ## Make the covariate object
-    gc_cov = covariate(name = c("gc"), type = c("numeric"), field = c("score"), data = cov_list)
-    gc.cov = gc_cov
-    this.dat.chrom = data.table()
-    this.chrom = gr2dt(concatemers)
-    if (filter_binsets) {
-        this.chrom = this.chrom[support > summary(unique(this.chrom[, .(support, chid)])$support)[3]]####filtering out all bins below median support
-    }
-    this.chrom.w = unique(chid.to.test)
-    this.chrom.dt = rebin_community(concatemers, this.chrom.w, resolution=resolution)
-    this.chrom.dt[, cardinality := .N, by = chid]
-    this.chrom.dt = na.omit(this.chrom.dt)
-    ##
-    this.all.dat = copy(this.chrom.dt)
-    this.all.dat = this.all.dat[cardinality > 2]
-    this.all.dat[, bid := chid]
-    this.all.dat = this.all.dat[seqnames %in% chromosome]
-    this.all.dat[, overall.cardinality := cardinality, by = bid]
-    this.chrom.card = unique(this.all.dat[, .(overall.cardinality, bid)])
-    ######HELLL NAH
-    #this.all.dat = this.all.dat[cardinality < 100]
-    ####
-    this.sub.parq = leave_out_concatemers
-    this.sub.parq$cid = this.sub.parq$read_idx
-    this.all.dat[, binid := .I]
-    ##
-    ###filtering out the bad regions
-    ###this makes sense why it wouldn't be here for RE chromunity cause you're only looking at annotated regions anyway
-    this.all.dat$bid = this.all.dat$chid
-
-    ##only drop the binids in bad regions, keep the binsets as a whole perhaps
-    this.bad.binids = unique(as.character((dt2gr(this.all.dat) %&% (this.bad))$binid))                                                 
-    this.all.dat = this.all.dat[!binid %in% this.bad.binids]  
-    #browser()
-    debug(annotate)
-    this.chrom.dat = annotate(binsets = dt2gr(this.all.dat[, bid := chid]),
-                              k = 3,
-                              concatemers = this.sub.parq,
-                              covariates = gc.cov, resolution = resolution,
-                              mc.cores = mc.cores, numchunks = numchunks)
-    this.chrom.dat.2 = this.chrom.dat
-    this.chrom.dat = merge(this.chrom.dat, this.chrom.card[, bid := as.factor(bid)], by = "bid")
-    this.chrom.dat[, annotation := "chromunity"]
-    set.seed(198)
-    message("generating background binsets for the model")
-##
-    #back.dt = sliding_window_background(chromosome = chromosome, binsets = dt2gr(this.all.dat), n = 1000, resolution = resolution)#, mc.cores=mc.cores)
-    ##browser()
-    back.dt = re_background(binsets = dt2gr(this.all.dat), resolution = resolution, n=dim(this.all.dat)[1])#, mc.cores=mc.cores)
-    back.dt = back.dt[start != 1]
-    upper.bound = as.data.table(hg_seqlengths(genome = "BSgenome.Hsapiens.UCSC.hg38::Hsapiens"), keep.rownames = T)
-    setkeyv(back.dt, c("seqnames", "start"))
-    back.dt[, V1 := NULL]
-    back.dt = na.omit(back.dt)
-    back.dt = back.dt[!bid %in% back.dt[width < (resolution-1)]$bid]
-    back.dt = gr2dt(gr.reduce(dt2gr(back.dt), by = "bid"))
-    back.dt$bid <- as.factor(back.dt$bid)
-    back.dt = merge(back.dt, upper.bound, by.x = "seqnames", by.y = "V1", all.x = T, allow.cartesian = T)
-    back.dt = back.dt[end < V2][start < V2]
-    back.dt[, overall.cardinality := .N, by = bid]
-    back.dt = back.dt[overall.cardinality > 1]
-    ##
-    this.card = unique(back.dt[, .(bid, overall.cardinality)])
-    back_gr = dt2gr(back.dt)
-    message("extracting background binsets distances")
-    this.back.train.dat = annotate(binsets = dt2gr(back.dt),
-                                   interchromosomal.table = NULL, #all.hr.dt.mean,
-                                   gg = NULL,
-                                   concatemers = this.sub.parq, k = 3,
-                                   covariates = gc.cov, resolution = resolution,
-                                   mc.cores = mc.cores, numchunks = numchunks)
-    this.back.train.dat = merge(this.back.train.dat, this.card[, bid := as.factor(bid)], by = "bid")
-    this.back.train.dat[, annotation := "random"]
-    this.back.train.dat = this.back.train.dat[!bid %in% unique(this.back.train.dat[count > 1][width <= resolution]$bid)]
-    this.back.train.dat = this.back.train.dat[!bid %in% unique(this.back.train.dat[count > 1][min.dist < resolution]$bid)]
-    back.dt[, binid := .I]
-    this.bad.train = unique(as.character((back_gr %&% (this.bad))$bid))
-    this.back.train.dat = this.back.train.dat[!bid %in% this.bad.train]
-    this.back.train.dat = this.back.train.dat[!bid %in% this.back.train.dat[, .(sum(count)), by = bid][V1 == 0]$bid]
-####    
-    back.model = fit(na.omit(this.back.train.dat)[sum.counts > 0][, setdiff(names(this.back.train.dat), c('overall.cardinality', 'chr', 'annotation')), with = F])
-
-    this.chrom.dat = sscore(this.chrom.dat, model = back.model.ep)
-    message("generating random binsets for testing")
-    n.chrom = length(unique(this.chrom.dat$bid))
-    this.all.dat = this.all.dat[seqnames %in% chromosome]
-    back.test = re_background(binsets = dt2gr(this.all.dat), resolution = resolution, n=dim(this.all.dat)[1]*3)#, mc.cores=mc.cores)
-    #back.test = sliding_window_background(binsets = dt2gr(this.all.dat), chromosome = chromosome,
-    #                                      n = n.chrom*3,
-    #                                      resolution = resolution)
-    back.test[, V1 := NULL]
-    back.test = na.omit(back.test)
-    setkeyv(back.test, c("seqnames", "start"))
-    back.test[, start := ifelse(start < 0, 0, start)]
-    back.test = back.test[!bid %in% back.test[width < (resolution-1)]$bid]
-    back.test = gr2dt(gr.reduce(dt2gr(back.test), by = "bid"))
-    back.test = merge(back.test, upper.bound, by.x = "seqnames", by.y = "V1", all.x = T, allow.cartesian = T)
-    back.test = back.test[end < V2][start < V2]
-    back.test[, overall.cardinality := .N, by = bid]
-    back.test = back.test[overall.cardinality > 1]
-    back_test = dt2gr(back.test)
-###
-    back.test$bid <- as.factor(back.test$bid)
-    this.back.card = unique(back.test[, .(bid, overall.cardinality)])
-    bid.back = unique(back.test$bid)
-    message("extracting random binsets distances") 
-    this.back.test.dat = annotate(binsets = dt2gr(back.test), k=sub.binset.order,
-                                  concatemers = this.sub.parq,
-                                  covariates = gc.cov, resolution = resolution,
-                                  mc.cores = mc.cores, numchunks=numchunks)
-    this.back.test.dat = merge(this.back.test.dat, this.back.card, by = "bid")
-    this.back.test.dat[, annotation := "random"]
-    this.back.test.dat = this.back.test.dat[!bid %in% unique(this.back.test.dat[count > 1][width <= resolution]$bid)]
-###
-    this.back.test.dat = this.back.test.dat[!bid %in% unique(this.back.test.dat[count > 1][min.dist < resolution]$bid)]
-####
-####
-    this.bad.dat = unique(as.character((back_test %&% (this.bad))$bid))
-    this.back.test.dat = this.back.test.dat[!bid %in% this.bad.dat]
-    back_test = gr2dt(back_test)[bid %in% unique(this.back.test.dat$bid)]
-    #this.back.test.dat = sscore(this.back.test.dat, model = back.model)
-####
-    back.test[, binid := .I]
-#####
-    set.seed(178)
-    all.bid = unique(this.all.dat$bid)
-###
-    #browser()
-    message("starting random walks")
-    message("extracting shuffled binsets distances")
-    this.all.dat.shuff5 = pbmclapply(1:length(all.bid), function(nr){
-         this.clust = dt2gr(this.all.dat[bid == all.bid[nr]])
-         this.chrs = .chr2str(as.character(unique(seqnames(this.clust))))
-         this.clust.wind = gr.reduce(this.clust+2e6)
-         upper.bound = as.data.table(hg_seqlengths(genome = "BSgenome.Hsapiens.UCSC.hg38::Hsapiens"), keep.rownames = T)
-         this.clust.wind = (gr2dt(this.clust.wind)[, start := ifelse(start < 0, 1, start)])
-         this.clust.wind = merge(this.clust.wind, upper.bound, by.x = "seqnames", by.y = "V1", all.x = T, allow.cartesian = T)
-         this.clust.wind[, end := ifelse(end > V2, V2, end)]
-         this.clust.wind = dt2gr(this.clust.wind)
-         this.sub.win = gr2dt(this.sub.parq %&% this.clust.wind)
-         this.sub.win[, new.count := .N, by = read_idx]
-         ##
-         card = unique(this.sub.win[, .(read_idx, new.count)])
-         this.steps = sum(card$new.count)
-         this.tiles.orig = gr.tile(this.clust.wind, resolution)
-         if (nrow(this.sub.win) > 0){
-             this.tgm = cocount(dt2gr(this.sub.win), bins = (this.tiles.orig), by = 'read_idx', full = T)
-             A = this.tgm$mat %>% as.matrix
-             rownames(A) <- NULL
-             colnames(A) <- NULL
-             A[cbind(1:nrow(A), 1:nrow(A))] = 0
-             A = A + t(A)
-             An = A 
-             An = round(10*An/min(An[An>0]))  ##can you remove this background 1 value? does this change anything. peculiar
-             An = round(1+10*An/min(An[An>0]))
-             edges = as.data.table(which(An != 0, arr.ind = TRUE))[ , val := An[which(An!=0)]][, .(row = rep(row, val), col = rep(col, val))]
-             ##
-             G = graph.edgelist(edges[, cbind(row, col)])
-             RW = random_walk(G, start = 200, steps = sum(card$new.count)) %>% as.numeric
-             ##
-             rm(G)
-             rm(edges)
-             gc()
-             out = this.tgm$gr[RW]%>% gr2dt()
-             out$read_idx = card[, rep(read_idx, new.count)] 
-             out[, bid := all.bid[nr]]
-             out[, cid := read_idx]
-             
-             this.chrom.sh.dat = annotate(binsets = this.clust, verbose = F,
-                                          k = 3,
-                                          concatemers = dt2gr(out.old),
-                                          covariates = gc.cov, resolution = resolution, 
-                                          mc.cores = 2, numchunks = numchunks)
-         } else {
-             this.chrom.sh.dat = data.table(NA)
-         }
-         return(this.chrom.sh.dat)
-    }, mc.cores = 5, mc.preschedule = T)
-####
-##     bid.chrom = unique(this.all.dat$bid)
-##     chrom.this.chr.shuff5 = pbmclapply(1:length(bid.chrom), function(nr){
-##         this.clust = dt2gr(this.all.dat[bid == bid.chrom[nr]])
-##         #this.clust.wind = .collapse_gr(this.clust) + ((window.size))
-##         #this.sub.win = gr2dt(this_gr_testing %&% this.clust.wind)
-##         this.sub.win[, new.count := .N, by = read_idx]
-##         ##
-##         card = unique(this.sub.win[, .(read_idx, new.count)])
-##         this.steps = sum(card$new.count)
-##         this.tiles.orig = gr.tile(this.clust.wind, resolution)
-##         if (nrow(this.sub.win) > 0){
-##             this.tgm = cocount(dt2gr(this.sub.win), bins = (this.tiles.orig), by = 'read_idx', full = T)
-##             A = this.tgm$mat %>% as.matrix
-##             rownames(A) <- NULL
-##             colnames(A) <- NULL
-##             A[cbind(1:nrow(A), 1:nrow(A))] = 0
-##             A = A + t(A)
-##             An = A
-##             An = round(1+10*An/min(An[An>0]))
-##             edges = as.data.table(which(An != 0, arr.ind = TRUE))[ , val := An[which(An!=0)]][, .(row = rep(row, val), col = rep(col, val))]
-##             ##
-##             G = graph.edgelist(edges[, cbind(row, col)])
-##             RW = random_walk(G, start = 1, steps = sum(card$new.count)) %>% as.numeric
-##             ##
-##             out = this.tgm$gr[RW]%>% gr2dt()
-##             out$read_idx = card[, rep(read_idx, new.count)]
-##             out[, bid := bid.chrom[nr]]
-##         } else {
-##             out = data.table(NA)
-##         }
-##         return(out)
-##     }, mc.cores = 20)
-##     kill.zombies()
-##     message("running synergy")
-## ###
-##     chrom.this.chr.shuff5.ne = chrom.this.chr.shuff5[sapply(chrom.this.chr.shuff5, function(x) !inherits(x, "try-error"))]
-##     chrom.this.chr.shuff.dt = rbindlist(chrom.this.chr.shuff5.ne, fill = T)
-##     chrom.this.chr.shuff.dt[, `:=`(V1 = NULL)]
-##     chrom.this.chr.shuff.dt = na.omit(chrom.this.chr.shuff.dt)
-##     chrom.this.chr.shuff.dt[, unique.chr.comm := paste0(seqnames, "_", bid)]
-##     chrom.this.chr.shuff.dt[, cid := read_idx]
-##     set.seed(198)
-## ############
-##     message("extracting shuffled binsets distances")
-##     the.shuff.list = pbmclapply(1:length(bid.chrom), function(x){
-##         this.clust = dt2gr(this.all.dat[bid == bid.chrom[x]])
-##         chromosome = unique(as.character(seqnames(this.clust)))
-##         if (length(this.clust) %in% c(3:10)){
-##             this.clust.wind = (.collapse_gr(this.clust)+((window.size)))
-##             if (length(this.clust.wind %&% this.bad)  == 0){
-##                 this.chrom = tryCatch(annotate(concatemers = dt2gr(chrom.this.chr.shuff.dt[bid == bid.chrom[x]]), binsets = this.clust, covariates = gc_cov, verbose = F, resolution = resolution, k = 5, mc.cores = 1), error = function(e) NULL)
-##                 this.chrom = sscore(this.chrom, model = back_model)
-##                 }
-##             }
-##         },  mc.cores = 20)
-##         ##kill.zombies()
-## ###
-    #this.shuff.chrom = tryCatch(rbindlist(the.shuff.list, fill = T), error = function(e) NULL)
-    #browser()
-    this.all.dat.shuff5.ne = this.all.dat.shuff5[sapply(this.all.dat.shuff5, function(x) !inherits(x, "try-error"))]
-    this.all.sh = rbindlist(this.all.dat.shuff5.ne, fill =T)
-###
-    this.all.sh = sscore(this.all.sh, model = back.model)
-    sh.chrom = tryCatch(synergy(binsets = dt2gr(this.all.dat), annotated.binsets = this.all.sh, model = back.model), error = function(e) NULL)
-    sh.chrom$fdr = signif(p.adjust(sh.chrom$p, "BH"), 2)
-    ##
-#####
-    this.back.test.dat = sscore(this.back.test.dat, model = back.model)
-    theta = back.model$model$theta
-    s.chrom = synergy(binsets = dt2gr(this.all.dat), #theta = back.model$model$theta,
-                      annotated.binsets = this.chrom.dat, model = back.model)
-    s.chrom$fdr = signif(p.adjust(s.chrom$p, "BH"), 2)
-    b.chrom = synergy(binsets = dt2gr(back.test), #theta = back.model$model$theta,
-                      annotated.binsets = na.omit(this.back.test.dat), model = back.model)
-    b.chrom$fdr = signif(p.adjust(b.chrom$p, "BH"), 2)
-    ##
-    synergy.inter.EP = rbind(s.chrom[, annotation := "chromunity"],
-                             b.chrom[, annotation := "random"], 
-                             sh.chrom[, annotation := "shuffled"], fill = T)
-    if (!is.null(folder)) {
-        saveRDS(this.chrom.dat, paste0(folder,'chrom_annotate.rds'))
-        saveRDS(this.back.test.dat, paste0(folder,'back_annotate.rds'))
-        saveRDS(this.all.sh, paste0(folder,'shuffled_annotate.rds'))
-        saveRDS(this.all.dat, paste0(folder,'binsets.rds'))
-        saveRDS(back.model, paste0(folder,'back_model.rds'))
-        saveRDS(synergy.inter.EP, paste0(folder,'synergy_results.rds'))
-    }
-    return(synergy.inter.EP)
-}
-
-
-
-
-shuffle_concatemers = function(concatemers, contact_matrix) {
-    A = contact_matrix$mat %>% as.matrix
-    rownames(A) <- NULL
-    colnames(A) <- NULL
-    A[cbind(1:nrow(A), 1:nrow(A))] = 0
-    A = A + t(A)
-    An = A 
-    An = round(1+10*An/min(An[An>0]))  
-    edges = as.data.table(which(An != 0, arr.ind = TRUE))[ , val := An[which(An!=0)]][, .(row = rep(row, val), col = rep(col, val))]
-
-    G = graph.edgelist(edges[, cbind(row, col)])
-    
-    concats.binned = bin_concatemers(concatemers, contact_matrix$gr)
-    concats.dt = concats.binned
-    concats.dt = unique(concats.dt, by=c('binid','cidi')) ###dedupe!!
-
-    concat.counts = concats.dt[, new.count := .N, by='read_idx']
-
-
-    card = unique(concat.counts[, .(read_idx, new.count)])
-
-    this.steps = sum(card$new.count)
-
-    row.labels = 1:dim(An)[1]
-    start.index = row.labels[rowSums(An)>1]
-    
-    RW = random_walk(G, start = start.index, steps = sum(card$new.count)) %>% as.numeric
-    out = contact_matrix$gr[RW] %>% gr2dt()
-    out$read_idx = card[, rep(read_idx, new.count)] 
-
-}
-
-
-
-
-    
-
 
 
 
@@ -684,6 +299,89 @@ expand_seeds = function(seeds, dist.decay.test, pairwise, all.pairs.tested, bins
     ##merge(dist.decay.test, asdf[, c('pair.hashes','cluster')], by='pair.hashes')
 }    
 
+rebin_community = function(concatemers, this.chrom.w, resolution = 5e4, rebin_thresh=0.85) {
+    tiles = gr.tile(hg_seqlengths(genome = "BSgenome.Hsapiens.UCSC.hg38::Hsapiens"), resolution)
+    this.chrom = gr2dt(concatemers %Q% (chid %in% this.chrom.w))
+    this.list.chrom = pbmclapply(1:length(this.chrom.w), function(j){
+        this.pr = dt2gr(this.chrom[chid %in% this.chrom.w[j]])
+        sum.this.com = gr.sum((this.pr)+1e4)
+        sum.this.com = gr2dt(sum.this.com)
+        sum.this.com[, q := quantile(score, rebin_thresh), by = seqnames]
+        sum.this.com[, q := ifelse(q < 5, 5, q)]
+        active.cont = tryCatch((tiles %&% dt2gr(sum.this.com[score > q])), error = function(e) NULL)
+        this.clust = gr2dt(gr.reduce(active.cont))
+        this.clust[, chid := this.chrom.w[j]]
+        return(this.clust)
+    }, mc.cores  = 10)
+    if(length(this.chrom.w) == 1){
+        this.list.chrom = this.list.chrom$value
+    }
+    this.chrom.dt = rbindlist(this.list.chrom, fill = TRUE)
+    return(this.chrom.dt)
+}
+
+
+load_bad_regions = function(chromosome, genome.to.use = "BSgenome.Hsapiens.UCSC.hg38::Hsapiens") {
+    this.chr = chromosome
+    if(genome.to.use == "BSgenome.Hsapiens.UCSC.hg38::Hsapiens"){
+        bands.td = gTrack::karyogram(file = "/gpfs/commons/groups/imielinski_lab/DB/UCSC/hg38.cytoband.txt")
+    } else {
+        bands.td = gTrack::karyogram(file = "/gpfs/commons/groups/imielinski_lab/DB/UCSC/hg19.cytoband.txt")
+    }
+    bands = bands.td@data
+    bands = grl.unlist(do.call(`GRangesList`, bands))
+    cen = bands %Q% (stain=="acen")
+    if (!(this.chr %in% c('chrX', 'chrY'))) {
+        chr.ind = as.numeric(sub("chr*","",this.chr))
+    } else if (this.chr == 'chrX'){
+        chr.ind = 23
+    } else {
+        chr.ind = 24
+    }
+    
+    this.max = GRanges(paste0(this.chr, ":", hg_seqlengths(genome = genome.to.use)[chr.ind]-1e6, "-",  hg_seqlengths(genome = genome.to.use)[chr.ind]))         
+    this.min = GRanges(paste0(this.chr, ":", "1-1e6"))                                                                                                                       
+    this.cen = (cen %Q% (seqnames == this.chr))+1e6
+    this.bad = c(this.min, this.cen, this.max) 
+    return(this.bad)
+}
+    
+
+
+
+
+shuffle_concatemers = function(concatemers, contact_matrix) {
+    A = contact_matrix$mat %>% as.matrix
+    rownames(A) <- NULL
+    colnames(A) <- NULL
+    A[cbind(1:nrow(A), 1:nrow(A))] = 0
+    A = A + t(A)
+    An = A 
+    An = round(1+10*An/min(An[An>0]))  
+    edges = as.data.table(which(An != 0, arr.ind = TRUE))[ , val := An[which(An!=0)]][, .(row = rep(row, val), col = rep(col, val))]
+
+    G = graph.edgelist(edges[, cbind(row, col)])
+    
+    concats.binned = bin_concatemers(concatemers, contact_matrix$gr)
+    concats.dt = concats.binned
+    concats.dt = unique(concats.dt, by=c('binid','cidi')) ###dedupe!!
+
+    concat.counts = concats.dt[, new.count := .N, by='read_idx']
+
+
+    card = unique(concat.counts[, .(read_idx, new.count)])
+
+    this.steps = sum(card$new.count)
+
+    row.labels = 1:dim(An)[1]
+    start.index = row.labels[rowSums(An)>1]
+    
+    RW = random_walk(G, start = start.index, steps = sum(card$new.count)) %>% as.numeric
+    out = contact_matrix$gr[RW] %>% gr2dt()
+    out$read_idx = card[, rep(read_idx, new.count)] 
+
+}
+
 
 
 
@@ -719,59 +417,6 @@ plot_model_output = function(dt.small.model, pair.hash, bins, plotname='plot.pdf
 }
 
 
-
-aggregate_synergy_results = function(dir, toplevel=TRUE, strict.check=FALSE) {
-
-    dirs = list.dirs(dir, recursive=FALSE)
-    print(dirs)
-#####aggregate results function here basically
-
-    ##toplevel=TRUE
-    agg.synergy = pbmclapply(dirs, mc.cores = 2, mc.preschedule=FALSE, function(dir) {        
-        ##if(dir=="GM12878_dist_decay_all_chr/dist_decay_chr21_knn25_kmin5_resolution50000"){ hardcoded trash
-        ##    return(NULL)
-        ##}
-        if(toplevel==TRUE){
-            synergy.chunk = readRDS(paste0(dir, '/synergy_outputs/synergy_results.rds'))
-            binsets = readRDS(paste0(dir, '/synergy_outputs/binsets.rds'))
-        } else {
-            synergy.chunk = readRDS(paste0(dir, '/synergy_results.rds'))
-            binsets = readRDS(paste0(dir, '/binsets.rds'))
-        }
-        if(strict.check==TRUE & toplevel==TRUE) {
-            annotate = readRDS(paste0(dir, '/synergy_outputs/chrom_annotate.rds'))
-            synergy.chunk = symmetry_check(annotate, synergy.chunk, binsets)
-        } else if (strict.check == TRUE & toplevel==FALSE) {
-            annotate = readRDS(paste0(dir, '/chrom_annotate.rds'))
-            synergy.chunk = symmetry_check(annotate, synergy.chunk, binsets)
-        }
-        return(synergy.chunk)
-    })
-    agg.synergy = rbindlist(agg.synergy)
-    agg.synergy[, .N, by='annotation']
-
-
-    agg.synsets = pbmclapply(dirs, mc.cores = 2, function(dir) {
-        if(toplevel==TRUE){
-            synergy.chunk = readRDS(paste0(dir, '/synergy_outputs/synergy_results.rds'))
-            binsets = readRDS(paste0(dir, '/synergy_outputs/binsets.rds'))
-        } else {
-            synergy.chunk = readRDS(paste0(dir, '/synergy_results.rds'))
-            binsets = readRDS(paste0(dir, '/binsets.rds'))
-        }
-        ##synergy.chunk = readRDS(paste0(dir, '/synergy_results.rds'))
-        ##binsets = readRDS(paste0(dir, '/binsets.rds'))
-        binsets$bid = factor(binsets$bid)
-        synsets = merge(binsets, synergy.chunk[annotation=='chromunity', c('bid','fdr')], by='bid')
-        return(synsets)
-    })
-
-
-    
-    agg.synsets = rbindlist(agg.synsets)
-    synergies = dt2gr(agg.synsets[fdr<.1])
-    return(list(agg.synergy, synergies))
-}
 
 
 ###CANONICAL FUNCTION
@@ -1126,64 +771,6 @@ evaluate_synergy_experimental = function(res, leave_out_concatemers, chid.to.tes
 
 
 ##subsetted to training chr
-
-
-
-train_dist_decay_model = function(iterative.registry, iterative.registry.unlist.filterable, contact_matrix_unique, pairwise, concatemers, bins, pair.thresh=50) {
-
-     dist.decay.train = annotate_distance_decay(concatemers,
-                                                   bins,
-                                                   min.value = pair.thresh,
-                                                   window.size=50,
-                                                   simplicial.complex=iterative.registry,
-                                                   iterative.registry.unlist.filterable = iterative.registry.unlist.filterable,
-                                                   pairwise=pairwise,
-                                                   return.training=TRUE)
-
-
-
-    ####total contacts within window
-    
-     total.concats = dist.decay.train[(dist.a < 50 | dist.b < 50), .(total.concats = sum(num.concats)), by=c('pair.hashes')]
-
-     dist.decay.train = merge(dist.decay.train, total.concats, by='pair.hashes')
-        ##total.concats = dist.decay.test[(dist.a < 50 | dist.b < 50), .(total.concats = sum(num.concats)), by=c('pair.hashes')]
-        
-###GLM town
-
-     print('training model')
-     covariates = c('value.a.ratio','value.b.ratio')
-     fmstring = paste('num.concats ~', paste(paste0('log(', covariates, ')', collapse = ' + ')))
-        ##fmstring = paste0(fmstring, " + ", "offset(log(total.concats))") this sometimes does 
-     fm = formula(fmstring)
-
-
-        ##browser()
-     num.to.sample = 500000
-     if(num.to.sample > dim(dist.decay.train)[[1]]) {
-         num.to.sample = dim(dist.decay.train)[[1]]
-     }
-            
-     model = glm.nb(formula = fm, data=dist.decay.train[num.concats>0][sample(.N, num.to.sample)], control=glm.control(maxit=500))
-     return(model)
-}
-
-
-count_3way_track = function(pairwise.trimmed, dt.concats.sort, all.pairwise, bins) {
-    asdf = merge(pairwise.trimmed[i!=j], dt.concats.sort, by.x='i', by.y='binid', allow.cartesian=TRUE)
-    asdf.2 = merge(asdf, dt.concats.sort, by.x=c('j','cidi'), by.y=c('binid','cidi'))
-    mergerious = merge(asdf.2[, c('id','cidi','i','j')], dt.concats.sort, by='cidi', allow.cartesian=TRUE)
-    mergerious = mergerious[binid != i & binid != j]
-    dunka = mergerious[, .(num.concats = .N), by=c('id','binid')]
-    return(dunka)
-}
-
-
-
-
-
-
-
 
 
 
