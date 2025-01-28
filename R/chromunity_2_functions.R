@@ -3,8 +3,6 @@
 
 
 
-
-
 derive_binsets_from_network = function(G.kant, pairwise, binned.concats, bins, rr.thresh = 0, dist.decay.test=NULL, all.pairs.tested=NULL, num.members=10, pairwise.trimmed=pairwise, expansion.cutoff = 0.5, fdr.expansion.thresh = 0.25, fdr.thresh=0.1, rebin.resolution=10000) {
 ##num.members=2
     ##G.kant = bin.pair.network
@@ -60,7 +58,6 @@ derive_binsets_from_network = function(G.kant, pairwise, binned.concats, bins, r
     binsets.dt$chid = binsets.dt$bid
     ##browser()
 
-    ppdf(plot(plot_binsets(dt2gr(binsets.dt))), 'debug_plot.pdf')
     ## bins = dist.decay.test[pair.hashes=='c(2547, 2552)']
 
     binned.concats[, bincount := .N, by='binid']
@@ -481,10 +478,11 @@ evaluate_synergy_experimental = function(res, leave_out_concatemers, chid.to.tes
     gc_cov = covariate(name = c("gc"), type = c("numeric"), field = c("score"), data = cov_list)
     gc.cov = gc_cov
 
-    if(!(class(res) == 'data.table'))
+    if(!(class(res)[[1]] == 'data.table')) {
         this.chrom.dt = gr2dt(res$binsets)
-    else
+    } else {
         this.chrom.dt = res
+    }
     
     this.chrom.dt[, cardinality := .N, by = chid]
     this.chrom.dt = na.omit(this.chrom.dt)
@@ -573,7 +571,7 @@ evaluate_synergy_experimental = function(res, leave_out_concatemers, chid.to.tes
 ####    
 
     ##browser()
-    
+    ##debug(fit)
     back.model = fit(na.omit(this.back.train.dat)[sum.counts > 0][, setdiff(names(this.back.train.dat), c('overall.cardinality', 'chr', 'annotation')), with = F])
 
 
@@ -642,9 +640,9 @@ evaluate_synergy_experimental = function(res, leave_out_concatemers, chid.to.tes
 
     ##all.bid
     ##
-    ##browser()
-    s.chrom = synergy(binsets = dt2gr(this.all.dat), #theta = back.model$model$theta,
-                      annotated.binsets = this.chrom.dat, model = back.model)
+    browser()
+    
+    s.chrom = synergy(binsets = dt2gr(this.all.dat), annotated.binsets = this.chrom.dat, model = back.model)
     s.chrom$fdr = signif(p.adjust(s.chrom$p, "BH"), 2)
     print('the hit rate!!!')
     print(s.chrom[, .N])
@@ -652,7 +650,8 @@ evaluate_synergy_experimental = function(res, leave_out_concatemers, chid.to.tes
 
     saveRDS(s.chrom, paste0(folder,'synergy_results.rds'))
     saveRDS(this.chrom.dat, paste0(folder,'chrom_annotate.rds'))
-    
+
+    ##browser()
     this.all.dat.shuff5 = pbmclapply(1:length(all.bid), function(nr){
          this.clust = dt2gr(this.all.dat[bid == all.bid[nr]])
          this.chrs = .chr2str(as.character(unique(seqnames(this.clust))))
@@ -682,14 +681,8 @@ evaluate_synergy_experimental = function(res, leave_out_concatemers, chid.to.tes
          this.steps = sum(card$new.count)
 
          if (nrow(this.sub.win) > 0){
-             this.tgm = cocount(dt2gr(this.sub.win), bins = (this.tiles.orig), by = 'read_idx', full = T)
-             ##debug(shuffle_concatemers)
-             ##shuff.concats = shuffle_concatemers(this.sub.win, this.tgm)
-             ##shuff.concats$cid = shuff.concats$read_idx
+             this.tgm = dedupe_cocount(dt2gr(this.sub.win), bins = (this.tiles.orig), by = 'read_idx', full = T)
 
-             ##ppdf(plot(c(shuff.contacts$gtrack(name='shuff', clim=c(0,100)), this.tgm$gtrack(name='normal',clim=c(0,100))), gr.reduce(this.tiles.orig) + 3e5))
-             ##ppdf(plot(this.tgm$gtrack(clim=c(0,100)), gr.reduce(this.tiles.orig) + 3e5))
-             ##shuff.contacts = cocount(dt2gr(shuff.concats), bins = this.tiles.orig, by='read_idx', full=T)
              A = this.tgm$mat %>% as.matrix
              rownames(A) <- NULL
              colnames(A) <- NULL
@@ -729,7 +722,7 @@ evaluate_synergy_experimental = function(res, leave_out_concatemers, chid.to.tes
              this.chrom.sh.dat = data.table(NA)
          }
          return(this.chrom.sh.dat)
-    }, mc.cores = 5, mc.preschedule = T)
+    }, mc.cores = 2, mc.preschedule = T)
     #this.shuff.chrom = tryCatch(rbindlist(the.shuff.list, fill = T), error = function(e) NULL)
 
 
@@ -994,7 +987,7 @@ shuffle_concatemers_spiked = function(concatemers, contact_matrix, spike.set, st
 
     if(trim == TRUE){
         spiked.concats = spikes[read_idx %in% spikes$read_idx]
-        added.pairwise.contacts = cocount(dt2gr(spiked.concats), bins=contact_matrix$gr, by='read_idx')
+        added.pairwise.contacts = dedupe_cocount(dt2gr(spiked.concats), bins=contact_matrix$gr, by='read_idx')
         dt = added.pairwise.contacts$dat
         to.remove = dt[(i %in% spikes$binid) & (j %in% spikes$binid)][i != j]
 
@@ -1158,5 +1151,105 @@ plot_binsets = function(binsets.gr, name='binsets', height=NULL) {
 }
 
 ##Projects/testing/
+
+
+
+####DEDUPED COCOUNT
+
+#' @name cocount
+#' @title cocount
+#' @description
+#'
+#' gMatrix instantiator creates contact "counts" of "events", which are GRanges grouped into
+#' pairs / triples / groups (e.g. paired end reads, linked readsa, SPRITE contacts) via "by"
+#' column.
+#' 
+#' @param events GRanges of events
+#' @param by column of events GRanges that allows co-counting
+#' @param bins bins to count to, default is disjoin(events)
+#' @param frac whether to count fractional overlap of event with bin as 1 (frac == FALSE) or based on width
+#' @export
+dedupe_cocount = function(events, bins = disjoin(events), by = names(values(events))[1], weight = NULL, frac = FALSE, full = FALSE, fill = 0, na.rm = TRUE)
+{
+  if (length(events)==0)
+    return(gM(gr = bins, full = full, fill = fill, agg.fun = agg.fun, na.rm = na.rm))
+  
+  if (is.na(by))
+    stop('by must be specified and a metadata column of events GRanges')
+           
+  if (!(by %in% names(values(events))))
+    stop('by must be a metadata column of events GRanges')
+
+  events$group = values(events)[[by]]
+  if (!is.null(weight))
+    tmp = gr2dt(events[, c("group", weight)] %*% bins)
+  else
+    tmp = gr2dt(events[, c("group")] %*% bins)
+
+  if (nrow(tmp)>0)
+    tmp = tmp[!is.na(group), ]
+
+  if (!nrow(tmp))
+    {
+      if (length(bins)>0)
+        return(gM(bins))
+      else
+        return(gM())
+    }
+
+  if (!is.null(weight))
+    {
+      tmp$weight = tmp[[weight]]
+    }
+  else if (frac)
+    tmp[, weight := width/sum(width), by = group]
+  else
+    tmp[, weight := 1, by = group]
+  
+  tmp = tmp[, .(bid = subject.id, group = as.integer(factor(group)), weight)]
+
+####what if we dedupe here
+  ##browser()
+  tmp = unique(tmp, by=c('bid','group'))
+  
+  ## sum weights inside bin pairs that share a group
+  dat = merge(tmp, tmp, by = c('group'), allow.cartesian = TRUE)[, .(value = sum(weight.x * weight.y)), by = .(i = bid.x, j = bid.y)]
+###get rid of self edges how about that
+##  dat = dat[i != j]
+  
+  return(gM(bins, dat, full = full, fill = fill, na.rm = na.rm, agg.fun = sum))
+}
+
+shuffle_concatemers = function(concatemers, contact_matrix) {
+    A = contact_matrix$mat %>% as.matrix
+    rownames(A) <- NULL
+    colnames(A) <- NULL
+    A[cbind(1:nrow(A), 1:nrow(A))] = 0
+    A = A + t(A)
+    An = A 
+    An = round(1+10*An/min(An[An>0]))  
+    edges = as.data.table(which(An != 0, arr.ind = TRUE))[ , val := An[which(An!=0)]][, .(row = rep(row, val), col = rep(col, val))]
+
+    G = graph.edgelist(edges[, cbind(row, col)])
+    
+    concats.binned = bin_concatemers(concatemers, contact_matrix$gr)
+    concats.dt = concats.binned
+    concats.dt = unique(concats.dt, by=c('binid','cidi')) ###dedupe!!
+
+    concat.counts = concats.dt[, new.count := .N, by='read_idx']
+
+
+    card = unique(concat.counts[, .(read_idx, new.count)])
+
+    this.steps = sum(card$new.count)
+
+    row.labels = 1:dim(An)[1]
+    start.index = row.labels[rowSums(An)>1]
+    
+    RW = random_walk(G, start = start.index, steps = sum(card$new.count)) %>% as.numeric
+    out = contact_matrix$gr[RW] %>% gr2dt()
+    out$read_idx = card[, rep(read_idx, new.count)] 
+
+}
 
 
