@@ -54,7 +54,7 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
 
     ##Creates virtual pairwise contacts using cocount
     ##This version of cocount removes duplicate contacts from monomers overlapping genomic bins more than once
-    contact_matrix_unique = cocount(concatemers, bins = bins, by = 'read_idx')
+    contact_matrix_unique = dedupe_cocount(concatemers, bins = bins, by = 'read_idx')
     all.pairwise = contact_matrix_unique$dat
     all.pairwise$id = 1:dim(all.pairwise)[[1]]
     colnames(all.pairwise)[3] = 'pair.value'
@@ -68,7 +68,7 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
     cmessage('Reducing concatemers')
 
     ##Pre-processing step to merge monomers which are within 100 bp of each other 
-    reduced.concats.list = pbmclapply(cid.split, mc.cores=10, function(chunk) {
+    reduced.concats.list = pbmclapply(cid.split, mc.cores=5, function(chunk) {
         concat.sub = concatemers %Q% (read_idx %in% chunk$unique.cids)
         reduced.concats = grl.reduce(split(concat.sub, concat.sub$read_idx), pad=monomer.merge.distance)
         reduced.concats = unlist(reduced.concats)
@@ -176,7 +176,7 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
 }
 
 train_dist_decay_model_nozero = function(concatemers, bins, pair.thresh=50, numchunks=NULL, num.to.sample=250000, pairs.to.sample = 10000, mode='poisson', pairs.per.chunk=100){
-    contact_matrix_unique = cocount(concatemers, bins = bins, by = 'read_idx')
+    contact_matrix_unique = dedupe_cocount(concatemers, bins = bins, by = 'read_idx')
     all.pairwise = contact_matrix_unique$dat
     all.pairwise$id = 1:dim(all.pairwise)[[1]]
     colnames(all.pairwise)[3] = 'pair.value'
