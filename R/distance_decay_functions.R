@@ -370,4 +370,23 @@ count_3way_contacts = function(pairwise.trimmed, dt.concats.sort, all.pairwise, 
     return(dt.small)
 }
 
+sparse_n_tensor = function(dt.concats, numchunks=50, cardinality=3, cores=5) {
+    unique_cidi = dt.concats$cidi %>% unique
+    ucidl = split(unique_cidi, ceiling(runif(length(unique_cidi))*numchunks))
+
+    dt.concats.sort = dt.concats[order(binid, cidi)]
+    dt.concats.sort[, count := .N, by='cidi']
+    dt.concats.sort = dt.concats.sort[count >= cardinality]
+
+    combinatorics = mclapply(ucidl, mc.cores = cores, function(cidis) {
+        combn.chunk = dt.concats.sort[cidi %in% cidis, .(combn(binid,cardinality,simplify=FALSE)), by='cidi']
+        combn.chunk$hashes = combn.chunk$V1 %>% paste0
+        combn.chunk.count = combn.chunk[, .(count = .N, V1), by='hashes']
+        combns = unique(combn.chunk.count, by='hashes')
+        return(combns)
+    })
+
+    dt = rbindlist(combinatorics)
+    return(dt[,.(coords=V1,count)])
+}
 
