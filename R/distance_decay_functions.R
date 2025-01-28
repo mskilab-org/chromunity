@@ -120,7 +120,7 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
     #pre-processing done, now train the model
     ##trains distance decay model using subset of higher order contacts in one chromosome. 
     if(is.null(model)){
-        model = train_dist_decay_model_nozero(dt.concats.sort,pairwise.trimmed, bins %Q% (seqnames==training.chr), num.to.sample=num.to.sample)
+        model = train_dist_decay_model_nozero(dt.concats.sort, pairwise.trimmed, bins %Q% (seqnames==training.chr), all.pairwise=all.pairwise, num.to.sample=num.to.sample)
     }
 
     if(is.null(numchunks))
@@ -135,9 +135,10 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
     pairwise.chunks = split(pairwise.trimmed, by='group')
 
 
-    ###The most computationally expensive step of this process, analyzes higher order contacts in parallel.
+###The most computationally expensive step of this process, analyzes higher order contacts in parallel.
+    ##browser()
     scored.chunks = pbmclapply(pairwise.chunks, mc.cores = mc.cores, function(pairwise.chunk) {
-        annot.chunk = count_3way_contacts(pairwise.chunk, dt.concats.sort, all.pairwise, bins, resolution=resolution, interchromosomal.distance = interchromosomal.distance)
+        annot.chunk = count_3way_contacts(pairwise.chunk, dt.concats.sort, all.pairwise, bins, interchromosomal.distance = interchromosomal.distance)
         if(mask.bad.regions == TRUE){
             annot.chunk = annot.chunk[!(binterrogate %in% bad.bins$binid)]
         }
@@ -148,13 +149,19 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
         }
         return(dt.small.scored)
     })
-    
+
+    ##browser()
     genome.wide.dist.decay = rbindlist(scored.chunks)
 
     genome.wide.dist.decay[, relative.risk := log2(num.concats/num.concats.pred)] ###relative.risk is a misnomer, this should probably be relabeled as observed/expected.
     genome.wide.dist.decay$fdr = signif(p.adjust(genome.wide.dist.decay$pval, "BH"), 2)
     trimmed.dist.decay = genome.wide.dist.decay[fdr<fdr.thresh]
-
+    
+    
+    if(dim(trimmed.dist.decay)[[1]] == 0) {
+        stop('Error: No significant three-way contacts discovered with benjamini-hochberg multiple corrections. Try a lower resolution.')
+    }
+        
     print(trimmed.dist.decay)
     print(all.pairwise)
     
@@ -174,7 +181,7 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
     return(chrom)
 }
 
-train_dist_decay_model_nozero = function(dt.concats.sort, pairwise.trimmed,bins,  numchunks=NULL, num.to.sample=250000, pairs.to.sample = 10000, mode='poisson', pairs.per.chunk=100){
+train_dist_decay_model_nozero = function(dt.concats.sort, pairwise.trimmed, bins, all.pairwise, numchunks=NULL, num.to.sample=250000, pairs.to.sample = 10000, mode='poisson', pairs.per.chunk=100){
 
     unique.pairs = pairwise.trimmed$pair.hashes %>% unique
 
@@ -195,6 +202,8 @@ train_dist_decay_model_nozero = function(dt.concats.sort, pairwise.trimmed,bins,
 
     pairwise.chunks = split(pairwise.trimmed, by='group')
 
+    ##browser()
+
     scored.chunks = pbmclapply(pairwise.chunks, mc.cores = 5, function(pairwise.chunk) {
         annot.chunk = count_3way_contacts(pairwise.chunk, dt.concats.sort, all.pairwise, bins)
         return(annot.chunk)
@@ -207,7 +216,7 @@ train_dist_decay_model_nozero = function(dt.concats.sort, pairwise.trimmed,bins,
     ##fmstring = paste0(fmstring, " + ", "offset(log(total.concats))") ##this sometimes does 
 
     fm = formula(fmstring)
-
+    
     if(num.to.sample > dim(dist.decay.train[dist.a <= 50 & dist.b <= 50])[[1]]) {
         train.subset = dist.decay.train[dist.a <= 50 & dist.b <= 50]
     } else { 
@@ -233,17 +242,17 @@ bin_concatemers = function(concatemers, bins, max.slice = 1e6, mc.cores=5, verbo
     concatemers = concatemers %Q% (!is.na(binid))
     reads = as.data.table(concatemers)[, `:=`(count, .N), by = cid]    
     reads[, cidi := as.integer(cid)]
-    return(reads[,(binid,cidi,N)])
+    return(reads)
 }
 
 score_distance_decay = function(dt.small.model, model, mode='poisson'){
     dt.small.model$num.concats.pred = (predict(model, type = "response", newdata = dt.small.model))
 
     # TO DO: check that "lower.tail=F" makes sense in this case... 
-    if (model=='poisson'){
+    if (mode=='poisson'){
         pval = ppois(dt.small.model$num.concats -1, lambda = dt.small.model$num.concats.pred, lower.tail = F)
         pval.right = ppois(dt.small.model$num.concats, lambda = dt.small.model$num.concats.pred, lower.tail = F)
-    }else if (model=='nbinom'){
+    }else if (mode=='nbinom'){
         pval = pnbinom(dt.small.model$num.concats -1, mu = dt.small.model$num.concats.pred, size=model$theta, lower.tail = F)
         pval.right = pnbinom(dt.small.model$num.concats, mu = dt.small.model$num.concats.pred, size=model$theta, lower.tail = F)
     }
@@ -259,8 +268,11 @@ score_distance_decay = function(dt.small.model, model, mode='poisson'){
 
 count_3way_contacts = function(pairwise.trimmed, dt.concats.sort, all.pairwise, bins, interchromosomal.distance = 1e8) {
 
+    ###makes unlisting convenient
+    pairwise.trimmed$agg = do.call(Map, c(f = c, pairwise.trimmed[, c('i','j')]))
+    
     ###Performing these two joins will give you set of all concatemers which overlap both of i & j
-    concats.hitting.i = merge.data.table(pairwise.trimmed[i!=j], dt.concats.sort, by.x='i', by.y='binid')
+    concats.hitting.i = merge.data.table(pairwise.trimmed[i!=j], dt.concats.sort, by.x='i', by.y='binid', allow.cartesian=TRUE)
     concats.hitting.ij = merge.data.table(concats.hitting.i, dt.concats.sort, by.x=c('j','cidi'), by.y=c('binid','cidi'))
 
 
@@ -274,7 +286,7 @@ count_3way_contacts = function(pairwise.trimmed, dt.concats.sort, all.pairwise, 
 
     ####Now the problem becomes: can we calculate the pairwise contacts between i & the third bin given in V1.
     ####To make this easy with a join we create a new line for i & k and j & k
-    dt.sub = threeway.contact.counts[, .(sub.bin = unlist(agg)), by=c('i','j','V1')]
+    dt.sub = threeway.contact.counts[, .(sub.bin = unlist(agg)), by=c('i','j','V1','id','num.concats')]    
     dt.sub[sub.bin < V1, c('sub.bin','V1') := .(V1, sub.bin)] ##Swap these to join with pairwise contact matrix
     dt.sub = merge.data.table(dt.sub, all.pairwise[, c('i','j','pair.value')], by.x=c('V1','sub.bin'), by.y=c('i','j'), all.x=TRUE)
     dt.sub[is.na(pair.value), pair.value := 0]
@@ -291,6 +303,7 @@ count_3way_contacts = function(pairwise.trimmed, dt.concats.sort, all.pairwise, 
     dt.sub[sub.isinter==TRUE, binterrogate := sub.bin]
     dt.sub = dt.sub[binterrogate!=0]
 
+    
     dt.sub$pair.hashes = dt.sub$id
     dt.sub[, sum.pairwise.contacts := sum(pair.value), by=c('pair.hashes','binterrogate')]
     dt.sub[, dist.i := abs(binterrogate - i)]

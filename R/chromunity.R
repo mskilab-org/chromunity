@@ -58,8 +58,8 @@ parquet2gr = function(path = NULL, col_names = NULL, save_path = NULL, prefix = 
     parq.list = pbmclapply(1:nrow(all.paths), function(k){
         parq.al = read_parquet(all.paths[k]$file_path)#,  col_select = col_names)
         parq.al = as.data.table(parq.al)        
-        parq.al[, count := .N, by=cid]
-        parq.al[, order := 1:count[[1]], by=cid]
+        parq.al[, count := .N, by=read_name]
+        parq.al[, order := 1:count[[1]], by=read_name]
         return(parq.al)
     }, mc.cores = mc.cores)
 
