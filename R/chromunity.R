@@ -9,16 +9,15 @@
 #' @importFrom Matrix sparseMatrix
 #' @importFrom plyr round_any
 #' @import zoo
-#' 
 #' @importFrom pbmcapply pbmclapply 
 #' @importFrom parallel mclapply
 #' @importFrom stats median
 #' @importFrom stats na.omit
-#' @importFrom MASS ginv
-#' @importFrom utils globalVariables
+#' #' @importFrom utils globalVariables
 #' @importFrom magrittr %>%
 #' @import GenomicRanges
 #' @import gUtils
+#' @import MASS
 #' @importFrom igraph graph.adjacency
 #' @importFrom igraph cluster_louvain
 #' @importFrom igraph cluster_fast_greedy
@@ -769,7 +768,7 @@ fit = function(annotated.binsets, nb = TRUE, return.model = TRUE, verbose = TRUE
   ## fmstring = paste0(fmstring, " + ", "offset(log(width))")
   fm = formula(fmstring)
   ##
-  model = tryCatch(glm.nb(formula = fm, data = annotated.binsets, control = glm.control(maxit = maxit)), error = function(e) NULL)
+  model = tryCatch(MASS::glm.nb(formula = fm, data = annotated.binsets, control = glm.control(maxit = maxit)), error = function(e) NULL)
 
   return(list(model = model, covariates = covariates))
 }
