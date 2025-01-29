@@ -142,11 +142,11 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
     all.pairwise.2 = all.pairwise %>% copy
     all.pairwise.2$i = all.pairwise$j
     all.pairwise.2$j = all.pairwise$i
-    all.pairwise = rbind(all.pairwise, all.pairwise.2)
+    all.pairwise.sym = rbind(all.pairwise, all.pairwise.2)
 
 
     scored.chunks = pbmclapply(pairwise.chunks, mc.cores = mc.cores, function(pairwise.chunk) {
-        annot.chunk = count_3way_contacts(pairwise.chunk, dt.concats.sort, all.pairwise, bins, interchromosomal.distance = interchromosomal.distance)
+        annot.chunk = count_3way_contacts(pairwise.chunk, dt.concats.sort, all.pairwise.sym, bins, interchromosomal.distance = interchromosomal.distance)
         if(mask.bad.regions == TRUE){
             annot.chunk = annot.chunk[!(binterrogate %in% bad.bins$binid)]
         }
@@ -158,9 +158,9 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
         return(dt.small.scored)
     })
 
-    ##browser()
     genome.wide.dist.decay = rbindlist(scored.chunks)
-
+    genome.wide.dist.decay$pair.hashes = genome.wide.dist.decay$id
+    
     genome.wide.dist.decay[, relative.risk := log2(num.concats/num.concats.pred)] ###relative.risk is a misnomer, this should probably be relabeled as observed/expected.
     genome.wide.dist.decay$fdr = signif(p.adjust(genome.wide.dist.decay$pval, "BH"), 2)
     trimmed.dist.decay = genome.wide.dist.decay[fdr<fdr.thresh]
@@ -170,9 +170,6 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
         stop('Error: No significant three-way contacts discovered with benjamini-hochberg multiple corrections. Try a lower resolution.')
     }
         
-    print(trimmed.dist.decay)
-    print(all.pairwise)
-    
     bin.pair.network = create_bin_pair_network_efficient(trimmed.dist.decay, all.pairwise, rr.thresh=0) ###creates bin-pair network 
 
     if(!is.null(folder)) {
@@ -208,12 +205,19 @@ train_dist_decay_model_nozero = function(dt.concats.sort, pairwise.trimmed, bins
     pairwise.trimmed$id = pairwise.trimmed$pair.hashes
     all.pairwise$id = all.pairwise$pair.hashes
 
+
+    all.pairwise.2 = all.pairwise %>% copy
+    all.pairwise.2$i = all.pairwise$j
+    all.pairwise.2$j = all.pairwise$i
+    all.pairwise.sym = rbind(all.pairwise, all.pairwise.2)
+
+    
     pairwise.chunks = split(pairwise.trimmed, by='group')
 
     ##browser()
 
     scored.chunks = pbmclapply(pairwise.chunks, mc.cores = 5, function(pairwise.chunk) {
-        annot.chunk = count_3way_contacts(pairwise.chunk, dt.concats.sort, all.pairwise, bins)
+        annot.chunk = count_3way_contacts(pairwise.chunk, dt.concats.sort, all.pairwise.sym, bins)
         return(annot.chunk)
     })
     dist.decay.train = rbindlist(scored.chunks)
