@@ -323,11 +323,10 @@ count_3way_contacts = function(pairwise.trimmed, dt.concats.sort, all.pairwise, 
     ####Now the problem becomes: can we calculate the pairwise contacts between i & the third bin given in V1.
     ####To make this easy with a join we create a new line for i & k and j & k
 
-
     threeway.contact.counts = unique(threeway.contact.counts, by=c('id','binterrogate'))
 
-    i.contacts = merge(threeway.contact.counts, all.pairwise[, c('i','j','pair.value')], by.x=c('i','binterrogate'), by.y=c('i','j'))
-    j.contacts = merge(threeway.contact.counts, all.pairwise[, c('i','j','pair.value')], by.x=c('j','binterrogate'), by.y=c('i','j'))
+    i.contacts = merge.data.table(threeway.contact.counts, all.pairwise[, c('i','j','pair.value')], by.x=c('i','binterrogate'), by.y=c('i','j'))
+    j.contacts = merge.data.table(threeway.contact.counts, all.pairwise[, c('i','j','pair.value')], by.x=c('j','binterrogate'), by.y=c('i','j'))
 
     i.contacts[, dist := abs(binterrogate - i)]
     j.contacts[, dist := abs(binterrogate - j)]
@@ -389,7 +388,7 @@ count_3way_contacts = function(pairwise.trimmed, dt.concats.sort, all.pairwise, 
     a.values = all.contacts[!is.na(value.a.ratio), ..col_names]
     b.values = all.contacts[!is.na(value.b.ratio)]
 
-    dt.all = merge(a.values, b.values[, c('id','binterrogate','value.b','value.b.ratio','dist.b')], by=c('id','binterrogate'))
+    dt.all = merge.data.table(a.values, b.values[, c('id','binterrogate','value.b','value.b.ratio','dist.b')], by=c('id','binterrogate'))
     dt.all[, c('dist','close','number.ties') := NULL]
     
     return(dt.all)
