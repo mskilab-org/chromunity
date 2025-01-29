@@ -137,6 +137,14 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
 
 ###The most computationally expensive step of this process, analyzes higher order contacts in parallel.
     ##browser()
+
+    ###Symmetrize pairwise contacts
+    all.pairwise.2 = all.pairwise %>% copy
+    all.pairwise.2$i = all.pairwise$j
+    all.pairwise.2$j = all.pairwise$i
+    all.pairwise = rbind(all.pairwise, all.pairwise.2)
+
+
     scored.chunks = pbmclapply(pairwise.chunks, mc.cores = mc.cores, function(pairwise.chunk) {
         annot.chunk = count_3way_contacts(pairwise.chunk, dt.concats.sort, all.pairwise, bins, interchromosomal.distance = interchromosomal.distance)
         if(mask.bad.regions == TRUE){
@@ -269,7 +277,7 @@ score_distance_decay = function(dt.small.model, model, mode='poisson'){
 count_3way_contacts = function(pairwise.trimmed, dt.concats.sort, all.pairwise, bins, interchromosomal.distance = 1e8) {
 
     ###makes unlisting convenient
-    pairwise.trimmed$agg = do.call(Map, c(f = c, pairwise.trimmed[, c('i','j')]))
+    ##pairwise.trimmed$agg = do.call(Map, c(f = c, pairwise.trimmed[, c('i','j')]))
     
     ###Performing these two joins will give you set of all concatemers which overlap both of i & j
     concats.hitting.i = merge.data.table(pairwise.trimmed[i!=j], dt.concats.sort, by.x='i', by.y='binid', allow.cartesian=TRUE)
@@ -277,97 +285,87 @@ count_3way_contacts = function(pairwise.trimmed, dt.concats.sort, all.pairwise, 
 
 
     ###We do not know what else those concatemers are overlapping, join back to dt.concats sort to get the rest of concatemers
-    bins.hit.by.ij.concats = merge.data.table(concats.hitting.ij[, c('id','cidi','i','j','agg')], dt.concats.sort, by='cidi', allow.cartesian=TRUE)[binid!=i & binid != j]
+    bins.hit.by.ij.concats = merge.data.table(concats.hitting.ij[, c('id','cidi','i','j')], dt.concats.sort, by='cidi', allow.cartesian=TRUE)[binid!=i & binid != j]
 
     ###Counting three way contacts becomes a matter of counting the number of times binid appears with respect to each i & j
-    threeway.contact.counts= bins.hit.by.ij.concats[, .(num.concats = .N, agg), by=c('id','i','j','binid')]
-    colnames(threeway.contact.counts)[4]='V1'
-    threeway.contact.counts$agg = do.call(Map, c(f = c, threeway.contact.counts[, c('i','j')]))
+    threeway.contact.counts = bins.hit.by.ij.concats[, .(num.concats = .N), by=c('id','i','j','binid')]
+    colnames(threeway.contact.counts)[4]='binterrogate'
+    ##threeway.contact.counts$agg = do.call(Map, c(f = c, threeway.contact.counts[, c('i','j')]))
 
     ####Now the problem becomes: can we calculate the pairwise contacts between i & the third bin given in V1.
     ####To make this easy with a join we create a new line for i & k and j & k
-    dt.sub = threeway.contact.counts[, .(sub.bin = unlist(agg)), by=c('i','j','V1','id','num.concats')]    
-    dt.sub[sub.bin < V1, c('sub.bin','V1') := .(V1, sub.bin)] ##Swap these to join with pairwise contact matrix
-    dt.sub = merge.data.table(dt.sub, all.pairwise[, c('i','j','pair.value')], by.x=c('V1','sub.bin'), by.y=c('i','j'), all.x=TRUE)
-    dt.sub[is.na(pair.value), pair.value := 0]
 
-    ##Find which of sub.bin and binid are not equal to i & j, call this "binterrogate", this is the third bin for whose higher order contacts
-    ##we are "interrogating".
 
-    #maybe some refactorring is in order down here
-    dt.sub = dt.sub[V1 != sub.bin]
-    dt.sub$V1.isinter = !(dt.sub[, V1 == i] | dt.sub[, V1 == j])
-    dt.sub$sub.isinter = !(dt.sub[, sub.bin == i] | dt.sub[, sub.bin == j])
-    dt.sub$binterrogate = 0
-    dt.sub[V1.isinter==TRUE, binterrogate := V1]
-    dt.sub[sub.isinter==TRUE, binterrogate := sub.bin]
-    dt.sub = dt.sub[binterrogate!=0]
+    threeway.contact.counts = unique(threeway.contact.counts, by=c('id','binterrogate'))
 
-    
-    dt.sub$pair.hashes = dt.sub$id
-    dt.sub[, sum.pairwise.contacts := sum(pair.value), by=c('pair.hashes','binterrogate')]
-    dt.sub[, dist.i := abs(binterrogate - i)]
-    dt.sub[, dist.j := abs(binterrogate - j)]
+    i.contacts = merge(threeway.contact.counts, all.pairwise[, c('i','j','pair.value')], by.x=c('i','binterrogate'), by.y=c('i','j'))
+    j.contacts = merge(threeway.contact.counts, all.pairwise[, c('i','j','pair.value')], by.x=c('j','binterrogate'), by.y=c('i','j'))
+
+    i.contacts[, dist := abs(binterrogate - i)]
+    j.contacts[, dist := abs(binterrogate - j)]
+
+    ###Get interchromosomal distance
     bins.gr = bins
     bins.gr$binid = 1:length(bins.gr)
     bins.dt = gr2dt(bins.gr)
-    setkey(bins.dt, 'binid')
-    dt.sub$chr.i = bins.dt[dt.sub$i]$seqnames
-    dt.sub$chr.j = bins.dt[dt.sub$j]$seqnames
-    dt.sub$chr.binterrogate = bins.dt[dt.sub$binterrogate]$seqnames
+    setkey(bins.dt, 'binid')    
+    resolution = median(width(bins))
+    inter.dist = interchromosomal.distance / resolution
+
+    ###Do this on individual i/j contacts to not deal with ambiguities
+    i.contacts$chr.i = bins.dt[i.contacts$i]$seqnames
+    j.contacts$chr.j = bins.dt[j.contacts$j]$seqnames
+
+    i.contacts$chr.binterrogate = bins.dt[i.contacts$binterrogate]$seqnames
+    j.contacts$chr.binterrogate = bins.dt[j.contacts$binterrogate]$seqnames
+
+    i.contacts[chr.i != chr.binterrogate, dist := inter.dist]
+    j.contacts[chr.j != chr.binterrogate, dist := inter.dist]
+    i.contacts[, c('chr.i','chr.binterrogate') := NULL]
+    j.contacts[, c('chr.j','chr.binterrogate') := NULL]
+               
+    
+    
+    ####Finding chromosomes of each bin
+
+    all.contacts = rbind(i.contacts, j.contacts)
 
     ####interchromosomal distance
     ####we assign interchromosomal distances a value manually passed in
 
-    resolution = median(width(bins))
-    inter.dist = interchromosomal.distance / resolution
-    dt.sub[chr.i != chr.binterrogate, dist.i := inter.dist]
-    dt.sub[chr.j != chr.binterrogate, dist.j := inter.dist]
-    dt.sub[, chr.i := NULL]
-    dt.sub[, chr.j := NULL]
-    dt.sub[, chr.V1 := NULL]
-    dt.sub[, diff := j-i]
-    dt.sub = dt.sub[diff > 1]
-    dt.sub[, pair.value := pair.value + 1] ###for log covariate purposes
-    print('calculating close and far pairwise contact values')
-    ###pair.value corresponds to pairwise contacts value between V1 and sub.bin
-    ###So here the problem is not to determine which of these pairwise contacts should be considered "close" and "far"
-    ###For the case where binterrogate is to the left of both i & j (meaning binterrogate < i) this is fairly easy
-    dt.sub[binterrogate < i & j == sub.bin, value.b := pair.value] ##CLOSER BIN
-    dt.sub[binterrogate < i & i == sub.bin, value.a := pair.value] ##FARTHER BIN
-    ###For the case where binterrogate is to the right of both i & j (meaning binterrogate > j) this is also pretty straightforward
-    dt.sub[binterrogate > j & i == V1, value.a := pair.value]
-    dt.sub[binterrogate > j & j == V1, value.b := pair.value]
-    ###The tricky edge case is when binterrogate is between i & j 
+    ###Here we 
+    all.contacts[, close := dist == min(dist), by=c('id','binterrogate')]
     
-    dt.sub[binterrogate > i & binterrogate < j & ((binterrogate - i) < (j - binterrogate)) & i==V1, value.a := pair.value]
-    dt.sub[binterrogate > i & binterrogate < j & ((binterrogate - i) < (j - binterrogate)) & j==sub.bin, value.b := pair.value]
-    dt.sub[binterrogate > i & binterrogate < j & ((binterrogate - i) >= (j - binterrogate)) & j==sub.bin, value.a := pair.value]
-    dt.sub[binterrogate > i & binterrogate < j & ((binterrogate - i) >= (j - binterrogate)) & i==V1, value.b := pair.value]
+###Resolve ties where i and j are the same distance: choose i to be close bin
 
-    dt.sub.unique = unique(dt.sub, by=c('pair.hashes','binterrogate'))
+    setorder(all.contacts, 'i')
+    all.contacts[, number.ties := 1:sum(close==TRUE), by=c('id','binterrogate')]
+    all.contacts[number.ties==2, close := FALSE] 
 
-    dt.sub.unique[, value.a := NULL]
-    dt.sub.unique[, value.b := NULL]
+####A = FARTHER BIN
+###B = CLOSER BIN
+    
+    all.contacts[close == FALSE, dist.b := dist]
+    all.contacts[close == FALSE, value.b := pair.value]
 
-    a.value = dt.sub[!is.na(value.a), c('pair.hashes','value.a','binterrogate')] %>% unique(by=c('pair.hashes','binterrogate'))
-    b.value = dt.sub[!is.na(value.b), c('pair.hashes','value.b','binterrogate')] %>% unique(by=c('pair.hashes','binterrogate'))
+    all.contacts[close == TRUE, dist.a := dist]
+    all.contacts[close == TRUE, value.a := pair.value]
 
-    dt.sub.unique = merge.data.table(dt.sub.unique, a.value, by=c('pair.hashes','binterrogate'))
-    dt.sub.unique = merge.data.table(dt.sub.unique, b.value, by=c('pair.hashes','binterrogate'))
+    all.contacts[, value.a := value.a + 1]
+    all.contacts[, value.b := value.b + 1]
+    all.contacts[, value.a.ratio := value.a / dist.a]
+    all.contacts[, value.b.ratio := value.b / dist.b]    
+    
+    col_names = setdiff(colnames(all.contacts), c('value.b.ratio','value.b','dist.b'))
+    a.values = all.contacts[!is.na(value.a.ratio), ..col_names]
+    b.values = all.contacts[!is.na(value.b.ratio)]
 
-    dt.sub.unique[, dist.a := min(dist.i, dist.j), by=c('pair.hashes','binterrogate')]
-    dt.sub.unique[, dist.b := max(dist.i, dist.j), by=c('pair.hashes','binterrogate')]
-    dt.small = dt.sub.unique[, c('pair.hashes','num.concats','pair.value','binterrogate','sum.pairwise.contacts','dist.a','dist.b','value.a','value.b')]
-    dt.small = unique(dt.small, by=c('pair.hashes','binterrogate'))
-
-    dt.small[, value.a.ratio := value.a / dist.a]
-    dt.small[, value.b.ratio := value.b / dist.b]
-    dt.small = dt.small[dist.a > 1 & dist.b > 1]
-
-    dt.small = merge.data.table(dt.small, pairwise.trimmed[, c('i','j','id')], by.x='pair.hashes', by.y='id')
-
-    return(dt.small)
+    dt.all = merge(a.values, b.values[, c('id','binterrogate','value.b','value.b.ratio','dist.b')], by=c('id','binterrogate'))
+    dt.all[, c('dist','close','number.ties') := NULL]
+    
+    return(dt.all)
+    
+    
 }
 
 
