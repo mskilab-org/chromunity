@@ -33,7 +33,7 @@
 #' @param monomer.merge.distance bp distance between which to merge monomers into a single monomer.
 #' @author Jameson Orvis
 #' @export
-#' @return 
+#' @return chrom Chromunity object containing binsets nominated by Chromunity v2 
 
 interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL, interchromosomal.distance = 1e8, training.chr = 'chr8', pair.thresh=50, mask.bad.regions = TRUE, fdr.thresh=0.1, fdr.expansion.thresh=0.25, expansion.cutoff=0.2, num.members=10, folder=NULL, chromosome=NULL, model=NULL, pairwise.trimmed=NULL, num.to.sample=250000, rebin.resolution=10000, pairs.per.chunk=1000, mc.cores=2, compressed.representation=FALSE, numchunks=200, genome.to.use = "BSgenome.Hsapiens.UCSC.hg38::Hsapiens", monomer.merge.distance = 100) {
 
@@ -73,9 +73,7 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
     })
 
     dt.concats.reduced = rbindlist(reduced.concats.list)
-
     reduced.concatemers = dt2gr(dt.concats.reduced)
-
     binned.concats = bin_concatemers(reduced.concatemers, bins, max.slice=1e6, mc.cores=5)
     
     if(!is.null(folder)){
@@ -119,8 +117,15 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
 
     #pre-processing done, now train the model
     ##trains distance decay model using subset of higher order contacts in one chromosome. 
+
+    ###Symmetrize pairwise contacts
+    all.pairwise.2 = all.pairwise %>% copy
+    all.pairwise.2$i = all.pairwise$j
+    all.pairwise.2$j = all.pairwise$i
+    all.pairwise.sym = rbind(all.pairwise, all.pairwise.2)
+
     if(is.null(model)){
-        model = train_dist_decay_model_nozero(dt.concats.sort, pairwise.trimmed, bins %Q% (seqnames==training.chr), all.pairwise=all.pairwise, num.to.sample=num.to.sample)
+        model = train_dist_decay_model_nozero(dt.concats.sort, pairwise.trimmed, bins %Q% (seqnames==training.chr), all.pairwise=all.pairwise.sym, num.to.sample=num.to.sample)
     }
 
     if(is.null(numchunks))
@@ -136,15 +141,6 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
 
 
 ###The most computationally expensive step of this process, analyzes higher order contacts in parallel.
-    ##browser()
-
-    ###Symmetrize pairwise contacts
-    all.pairwise.2 = all.pairwise %>% copy
-    all.pairwise.2$i = all.pairwise$j
-    all.pairwise.2$j = all.pairwise$i
-    all.pairwise.sym = rbind(all.pairwise, all.pairwise.2)
-
-
     scored.chunks = pbmclapply(pairwise.chunks, mc.cores = mc.cores, function(pairwise.chunk) {
         annot.chunk = count_3way_contacts(pairwise.chunk, dt.concats.sort, all.pairwise.sym, bins, interchromosomal.distance = interchromosomal.distance)
         if(mask.bad.regions == TRUE){
@@ -167,7 +163,7 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
     
     
     if(dim(trimmed.dist.decay)[[1]] == 0) {
-        stop('Error: No significant three-way contacts discovered with benjamini-hochberg multiple corrections. Try a lower resolution.')
+        stop('Error: No significant three-way contacts discovered with benjamini-hochberg multiple corrections. Coverage may be too low to robustly nominate higher order interactions at this resolution.')
     }
         
     bin.pair.network = create_bin_pair_network_efficient(trimmed.dist.decay, all.pairwise, rr.thresh=0) ###creates bin-pair network 
@@ -185,6 +181,21 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
     
     return(chrom)
 }
+
+#' @name train_dist_decay_model_nozero
+#' @description
+#'
+#' This function produces a linear regression model to predict higher order contact counts from pairwise contacts for use in downstream analysis. It will call count_3way_contacts on a subset of data for more efficient training.
+#'
+#' @param dt.concats.sort a simplified representation of Pore-C concatemers, simply a data table with the fields "cidi" = concatemer id and "binid".
+#' @param pairwise.trimmed a data table with fields i, j, and pair.value, representing the bin-pairs we use a reference from which we are "interrogating" the multiway interactions which it as a subset. this can be produced from the $dat field of a GxG object
+#' @param bins a GRanges object with the field "binid" representing the genomic position of every index used for analysis
+#' @param all.pairwise a full pairwise contact map with fields i, j, and pair.value. importantly, this function expects all.pairwise to have been symmetrized, meaning for instance i=1 and j=2 has the same pair value as j=1 and i=2
+#' @param numchunks number of chunks for parallelization, automatically chosen by default
+#' @param num.to.sample number of data table rows to train linear model to predict higher order contact counts. by default it will also include quarter of this number of "far" higher order contacts, defined as the integer bin distance dist.a and dist.b being both greater than 50 to train the model
+#' @param pairs.to.sample creates sample of higher order contacts from this number of bin-pair references
+#' @param mode "poisson" or negative binomial otherwise
+#' @param pairs.per.chunk number of pairs to calculate per chunk for parallelization
 
 train_dist_decay_model_nozero = function(dt.concats.sort, pairwise.trimmed, bins, all.pairwise, numchunks=NULL, num.to.sample=250000, pairs.to.sample = 10000, mode='poisson', pairs.per.chunk=100){
 
@@ -205,19 +216,13 @@ train_dist_decay_model_nozero = function(dt.concats.sort, pairwise.trimmed, bins
     pairwise.trimmed$id = pairwise.trimmed$pair.hashes
     all.pairwise$id = all.pairwise$pair.hashes
 
-
-    all.pairwise.2 = all.pairwise %>% copy
-    all.pairwise.2$i = all.pairwise$j
-    all.pairwise.2$j = all.pairwise$i
-    all.pairwise.sym = rbind(all.pairwise, all.pairwise.2)
-
     
     pairwise.chunks = split(pairwise.trimmed, by='group')
 
     ##browser()
 
     scored.chunks = pbmclapply(pairwise.chunks, mc.cores = 5, function(pairwise.chunk) {
-        annot.chunk = count_3way_contacts(pairwise.chunk, dt.concats.sort, all.pairwise.sym, bins)
+        annot.chunk = count_3way_contacts(pairwise.chunk, dt.concats.sort, all.pairwise, bins)
         return(annot.chunk)
     })
     dist.decay.train = rbindlist(scored.chunks)
@@ -245,18 +250,30 @@ train_dist_decay_model_nozero = function(dt.concats.sort, pairwise.trimmed, bins
     return(model)
 }
 
-bin_concatemers = function(concatemers, bins, max.slice = 1e6, mc.cores=5, verbose=TRUE, hyperedge.thresh=NULL) {
+
+#' @name bin_concatemers
+#' @description
+#'
+#' This function calls gr.match to bin concatemers
+#'
+#' @param concatemers a Granges with the field read_idx representing id of each concatemer
+#' @param bins a GRanges object with the field "binid" representing the genomic position of every index used for analysis
+bin_concatemers = function(concatemers, bins, max.slice = 1e6, mc.cores=5, verbose=TRUE) {
     concatemers$binid = gr.match(concatemers, bins, max.slice = max.slice, mc.cores =  mc.cores, verbose = verbose)
-
     concatemers$cid = concatemers$read_idx
-    ## maybe NA need to be removed
-
     concatemers = concatemers %Q% (!is.na(binid))
     reads = as.data.table(concatemers)[, `:=`(count, .N), by = cid]    
     reads[, cidi := as.integer(cid)]
     return(reads)
 }
 
+#' @name score_distance_decay
+#' @description
+#'
+#' This function calculates an enrichment of every higher order contact using a model linear model 
+#'
+#' @param dt.small.model data table produced by count_3way_contacts function containing higher order contact counts
+#' @param model a poisson or negative binomial regression model produce by train_distance_decay_model_nozero function
 score_distance_decay = function(dt.small.model, model, mode='poisson'){
     dt.small.model$num.concats.pred = (predict(model, type = "response", newdata = dt.small.model))
 
@@ -264,7 +281,7 @@ score_distance_decay = function(dt.small.model, model, mode='poisson'){
     if (mode=='poisson'){
         pval = ppois(dt.small.model$num.concats -1, lambda = dt.small.model$num.concats.pred, lower.tail = F)
         pval.right = ppois(dt.small.model$num.concats, lambda = dt.small.model$num.concats.pred, lower.tail = F)
-    }else if (mode=='nbinom'){
+    } else if (mode=='nbinom'){
         pval = pnbinom(dt.small.model$num.concats -1, mu = dt.small.model$num.concats.pred, size=model$theta, lower.tail = F)
         pval.right = pnbinom(dt.small.model$num.concats, mu = dt.small.model$num.concats.pred, size=model$theta, lower.tail = F)
     }
@@ -278,6 +295,17 @@ score_distance_decay = function(dt.small.model, model, mode='poisson'){
 }
 
 
+
+#' @name count_3way_contacts
+#' @description
+#'
+#' This function computes higher order contact counts and merges them with pairwise contact for predicting higher order contact counts from the pairwise contact matrix
+#'
+#' @param pairwise.trimmed a data table with fields i, j, and pair.value, representing the bin-pairs we use a reference from which we are "interrogating" the multiway interactions which it as a subset. this can be produced from the $dat field of a GxG object
+#' @param dt.concats.sort a simplified representation of Pore-C concatemers, simply a data table with the fields "cidi" = concatemer id and "binid".
+#' @param all.pairwise a full pairwise contact map with fields i, j, and pair.value. importantly, this function expects all.pairwise to have been symmetrized, meaning for instance i=1 and j=2 has the same pair value as j=1 and i=2
+#' @param bins a GRanges object with the field "binid" representing the genomic position of every index used for analysis. each index i j and binterrogate corresponds to a binid in this object
+#' @param interchromosomal.distance a value used to assign values for interchromosomal distances
 count_3way_contacts = function(pairwise.trimmed, dt.concats.sort, all.pairwise, bins, interchromosomal.distance = 1e8) {
 
     ###Performing these two joins will give you set of all concatemers which overlap both of i & j
@@ -369,6 +397,15 @@ count_3way_contacts = function(pairwise.trimmed, dt.concats.sort, all.pairwise, 
     
 }
 
+#' @name sparse_n_tensor
+#' @description
+#'
+#' This function returns a sparse tensor representation of the three way contacts in dt.concats
+#'
+#' @param dt.concats.sort a simplified representation of Pore-C concatemers, simply a data table with the fields "cidi" = concatemer id and "binid".
+#' @param numchunks number of chunks for parallelization
+#' @param cardinality order of tensor to calculate
+#' @return dt data.table with aggregated list of coordinates and count of concatemers overlapping those coordinates
 sparse_n_tensor = function(dt.concats, numchunks=50, cardinality=3, cores=5) {
     unique_cidi = dt.concats$cidi %>% unique
     ucidl = split(unique_cidi, ceiling(runif(length(unique_cidi))*numchunks))
