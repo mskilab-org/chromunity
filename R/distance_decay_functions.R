@@ -280,9 +280,6 @@ score_distance_decay = function(dt.small.model, model, mode='poisson'){
 
 count_3way_contacts = function(pairwise.trimmed, dt.concats.sort, all.pairwise, bins, interchromosomal.distance = 1e8) {
 
-    ###makes unlisting convenient
-    ##pairwise.trimmed$agg = do.call(Map, c(f = c, pairwise.trimmed[, c('i','j')]))
-    
     ###Performing these two joins will give you set of all concatemers which overlap both of i & j
     concats.hitting.i = merge.data.table(pairwise.trimmed[i!=j], dt.concats.sort, by.x='i', by.y='binid', allow.cartesian=TRUE)
     concats.hitting.ij = merge.data.table(concats.hitting.i, dt.concats.sort, by.x=c('j','cidi'), by.y=c('binid','cidi'))
@@ -294,7 +291,6 @@ count_3way_contacts = function(pairwise.trimmed, dt.concats.sort, all.pairwise, 
     ###Counting three way contacts becomes a matter of counting the number of times binid appears with respect to each i & j
     threeway.contact.counts = bins.hit.by.ij.concats[, .(num.concats = .N), by=c('id','i','j','binid')]
     colnames(threeway.contact.counts)[4]='binterrogate'
-    ##threeway.contact.counts$agg = do.call(Map, c(f = c, threeway.contact.counts[, c('i','j')]))
 
     ####Now the problem becomes: can we calculate the pairwise contacts between i & the third bin given in V1.
     ####To make this easy with a join we create a new line for i & k and j & k
@@ -317,27 +313,28 @@ count_3way_contacts = function(pairwise.trimmed, dt.concats.sort, all.pairwise, 
     inter.dist = interchromosomal.distance / resolution
 
     ###Do this on individual i/j contacts to not deal with ambiguities
+    ####Finding chromosomes of each bin
     i.contacts$chr.i = bins.dt[i.contacts$i]$seqnames
     j.contacts$chr.j = bins.dt[j.contacts$j]$seqnames
 
     i.contacts$chr.binterrogate = bins.dt[i.contacts$binterrogate]$seqnames
     j.contacts$chr.binterrogate = bins.dt[j.contacts$binterrogate]$seqnames
 
+    ####interchromosomal distance
+    ####we assign interchromosomal distances a value manually passed in
+
+    
     i.contacts[chr.i != chr.binterrogate, dist := inter.dist]
     j.contacts[chr.j != chr.binterrogate, dist := inter.dist]
     i.contacts[, c('chr.i','chr.binterrogate') := NULL]
     j.contacts[, c('chr.j','chr.binterrogate') := NULL]
-               
-    
-    
-    ####Finding chromosomes of each bin
+                   
+
 
     all.contacts = rbind(i.contacts, j.contacts)
 
-    ####interchromosomal distance
-    ####we assign interchromosomal distances a value manually passed in
 
-    ###Here we 
+    ###Here we find which is closer
     all.contacts[, close := dist == min(dist), by=c('id','binterrogate')]
     
 ###Resolve ties where i and j are the same distance: choose i to be close bin
@@ -346,8 +343,8 @@ count_3way_contacts = function(pairwise.trimmed, dt.concats.sort, all.pairwise, 
     all.contacts[, number.ties := 1:sum(close==TRUE), by=c('id','binterrogate')]
     all.contacts[number.ties==2, close := FALSE] 
 
-####A = FARTHER BIN
-###B = CLOSER BIN
+###A = CLOSER BIN    
+###B = FARTHER BIN
     
     all.contacts[close == FALSE, dist.b := dist]
     all.contacts[close == FALSE, value.b := pair.value]
