@@ -124,6 +124,7 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
     all.pairwise.2$j = all.pairwise$i
     all.pairwise.sym = rbind(all.pairwise, all.pairwise.2)
 
+    cmessage("Training distance decay model")
     if(is.null(model)){
         model = train_dist_decay_model_nozero(dt.concats.sort, pairwise.trimmed, bins %Q% (seqnames==training.chr), all.pairwise=all.pairwise.sym, num.to.sample=num.to.sample)
     }
@@ -141,6 +142,8 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
 
 
 ###The most computationally expensive step of this process, analyzes higher order contacts in parallel.
+
+    cmessage("Counting and scoring threeway contacts")
     scored.chunks = pbmclapply(pairwise.chunks, mc.cores = mc.cores, function(pairwise.chunk) {
         annot.chunk = count_3way_contacts(pairwise.chunk, dt.concats.sort, all.pairwise.sym, bins, interchromosomal.distance = interchromosomal.distance)
         if(mask.bad.regions == TRUE){
@@ -165,7 +168,8 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
     if(dim(trimmed.dist.decay)[[1]] == 0) {
         stop('Error: No significant three-way contacts discovered with benjamini-hochberg multiple corrections. Coverage may be too low to robustly nominate higher order interactions at this resolution.')
     }
-        
+
+    cmessage("Creating bin-pair network")
     bin.pair.network = create_bin_pair_network_efficient(trimmed.dist.decay, all.pairwise, rr.thresh=0) ###creates bin-pair network 
 
     if(!is.null(folder)) {
@@ -176,7 +180,8 @@ interchr_dist_decay_binsets = function(concatemers, resolution=50000, bins=NULL,
         }
      }
 
-     ###creates chromunity object from bin-pair network
+###creates chromunity object from bin-pair network
+    cmessage("Constructing bin-sets")
     chrom = derive_binsets_from_network(bin.pair.network, pairwise=all.pairwise, binned.concats=binned.concats, bins=bins, rr.thresh=0, dist.decay.test=genome.wide.dist.decay[fdr < fdr.expansion.thresh], all.pairs.tested=NULL, pairwise.trimmed=pairwise.trimmed, expansion.cutoff = expansion.cutoff, fdr.thresh = fdr.thresh, num.members=num.members, rebin.resolution=rebin.resolution) 
     
     return(chrom)
@@ -282,7 +287,7 @@ score_distance_decay = function(dt.small.model, model, mode='poisson'){
         pval = ppois(dt.small.model$num.concats -1, lambda = dt.small.model$num.concats.pred, lower.tail = F)
         pval.right = ppois(dt.small.model$num.concats, lambda = dt.small.model$num.concats.pred, lower.tail = F)
     } else if (mode=='nbinom'){
-        pval = pnbinom(dt.small.model$num.concats -1, mu = dt.small.model$num.concats.pred, size=model$theta, lower.tail = F)
+        pval = pnbinom(dt.small.model$num.concats - 1, mu = dt.small.model$num.concats.pred, size=model$theta, lower.tail = F)
         pval.right = pnbinom(dt.small.model$num.concats, mu = dt.small.model$num.concats.pred, size=model$theta, lower.tail = F)
     }
 
@@ -291,6 +296,7 @@ score_distance_decay = function(dt.small.model, model, mode='poisson'){
     dt.small.model$pval = runif(nrow(dt.small.model), min = pval.right, max = pval)
     
     dt.small.model[, enrichment := num.concats / num.concats.pred]
+    dt.small.model$fdr = signif(p.adjust(dt.small.model$pval, "BH"), 2)
     return(dt.small.model)
 }
 
@@ -390,7 +396,8 @@ count_3way_contacts = function(pairwise.trimmed, dt.concats.sort, all.pairwise, 
 
     dt.all = merge.data.table(a.values, b.values[, c('id','binterrogate','value.b','value.b.ratio','dist.b')], by=c('id','binterrogate'))
     dt.all[, c('dist','close','number.ties') := NULL]
-    
+
+    dt.all = dt.all[dist.a > 1 & dist.b > 1]
     return(dt.all)
     
     
